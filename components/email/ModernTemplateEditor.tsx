@@ -149,7 +149,9 @@ export default function ModernTemplateEditor({
                 resolvedUrl = imgMatches[imgIdx];
                 imgIdx++;
               } else if (el.type === 'logo' || el.type === 'banner' || el.type === 'image') {
-                imgIdx++;
+                if (el.imageUrl) {
+                  imgIdx++;
+                }
               }
               return {
                 ...el,
@@ -158,6 +160,29 @@ export default function ModernTemplateEditor({
             });
           }
         } catch {}
+      }
+
+      // Fallback: If CAMPAIGN_STUDIO_DATA was stripped by backend sanitizer,
+      // extract actual <img> tags from initialTemplate.content directly
+      const htmlImgMatches = Array.from(
+        initialTemplate.content.matchAll(/<img[^>]+src=["']([^"']+)["']/gi)
+      ).map((m) => normalizeImageUrl(m[1]));
+
+      const matchedPreset = EMAIL_PRESETS.find(
+        (p) => p.id === initialTemplate?.template_id || p.designId === initialTemplate?.template_id
+      );
+      const fallbackPreset = matchedPreset || EMAIL_PRESETS.find((p) => p.designId === 'promotional_banner');
+      if (fallbackPreset && htmlImgMatches.length > 0) {
+        let hImgIdx = 0;
+        return fallbackPreset.elements.map((el) => {
+          if ((el.type === 'logo' || el.type === 'banner' || el.type === 'image') && htmlImgMatches[hImgIdx]) {
+            return {
+              ...el,
+              imageUrl: htmlImgMatches[hImgIdx++],
+            };
+          }
+          return el;
+        });
       }
     }
 
@@ -578,7 +603,7 @@ export default function ModernTemplateEditor({
             return `
             <tr>
               <td align="${align}" style="padding: ${pY}px 24px; text-align: ${align};">
-                <img src="${safeLogoUrl}" alt="${el.altText || 'Logo'}" border="0" style="max-height: 48px; width: auto; max-width: 180px; display: inline-block; border: none; outline: none; text-decoration: none; -ms-interpolation-mode: bicubic;" />
+                <img src="${safeLogoUrl}" alt="${el.altText || 'Logo'}" width="180" border="0" style="max-height: 48px; width: auto; max-width: 180px; display: inline-block; border: 0; outline: none; text-decoration: none; -ms-interpolation-mode: bicubic;" />
               </td>
             </tr>`;
 
@@ -595,7 +620,7 @@ export default function ModernTemplateEditor({
                     ? `<a href="${el.url}" target="_blank" style="text-decoration:none; display:block;">`
                     : ''
                 }
-                <img src="${safeBannerUrl}" alt="${el.altText || 'Banner'}" border="0" style="width: 100%; max-width: 100%; height: auto; display: block; border: none; border-radius: ${bannerRadius}; margin: 0 auto; outline: none; text-decoration: none; -ms-interpolation-mode: bicubic;" />
+                <img src="${safeBannerUrl}" alt="${el.altText || 'Banner'}" width="600" border="0" style="width: 100%; max-width: 100%; height: auto; display: block; border: 0; border-radius: ${bannerRadius}; margin: 0 auto; outline: none; text-decoration: none; -ms-interpolation-mode: bicubic;" />
                 ${el.url ? `</a>` : ''}
               </td>
             </tr>`;
@@ -613,7 +638,7 @@ export default function ModernTemplateEditor({
                     ? `<a href="${el.url}" target="_blank" style="text-decoration:none;">`
                     : ''
                 }
-                <img src="${safeImgUrl}" alt="${el.altText || 'Image'}" border="0" style="max-width: 100%; height: auto; display: inline-block; border: none; border-radius: ${imgRadius}; outline: none; text-decoration: none; -ms-interpolation-mode: bicubic;" />
+                <img src="${safeImgUrl}" alt="${el.altText || 'Image'}" width="600" border="0" style="width: 100%; max-width: 100%; height: auto; display: inline-block; border: 0; border-radius: ${imgRadius}; outline: none; text-decoration: none; -ms-interpolation-mode: bicubic;" />
                 ${el.url ? `</a>` : ''}
               </td>
             </tr>`;
@@ -844,8 +869,9 @@ export default function ModernTemplateEditor({
                 );
                 if (file) {
                   const res = await uploadEmailImage(file);
-                  if (res.success && res.data?.url) {
-                    const hostedUrl = normalizeImageUrl(res.data.url);
+                  const candidateUrl = res.data?.url || (res.data?.urls && res.data.urls[0]);
+                  if (res.success && candidateUrl) {
+                    const hostedUrl = normalizeImageUrl(candidateUrl);
                     return { ...el, imageUrl: hostedUrl };
                   } else {
                     uploadFailedError =

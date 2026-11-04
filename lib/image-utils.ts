@@ -279,7 +279,7 @@ export function extractHostedImageUrl(raw: unknown): string | null {
  * Sanitizes all <img> elements inside email HTML:
  * 1. Converts relative paths to absolute HTTPS URLs via API_BASE_URL.
  * 2. Upgrades http:// to https:// and replaces localhost.
- * 3. Ensures border="0" and email-safe inline styles.
+ * 3. Ensures email-compatible attributes: border="0", width="...", and inline style="max-width:100%;height:auto;".
  */
 export function sanitizeEmailHtmlImageUrls(html: string): string {
   if (!html || typeof html !== 'string') return '';
@@ -296,48 +296,197 @@ export function sanitizeEmailHtmlImageUrls(html: string): string {
     let newAttrs = attrs.replace(/src=["'][^"']+["']/i, `src="${normalizedSrc}"`);
 
     // Ensure border="0"
-    if (!/border=["']0["']/i.test(newAttrs)) {
+    if (!/border=["'][^"']*["']/i.test(newAttrs)) {
       newAttrs = `border="0" ${newAttrs}`;
     }
 
-    return `<img${newAttrs}>`;
+    // Determine appropriate width attribute if missing (crucial for Outlook/Word rendering engine)
+    const isLogo = /logo/i.test(newAttrs) || /max-height:\s*48px/i.test(newAttrs);
+    const hasWidth = /\bwidth=["'][^"']+["']/i.test(newAttrs);
+    if (!hasWidth) {
+      newAttrs = `${newAttrs} width="${isLogo ? '180' : '600'}"`;
+    }
+
+    // Ensure style has max-width: 100% and height: auto
+    const styleMatch = newAttrs.match(/style=["']([^"']+)["']/i);
+    if (styleMatch) {
+      let existingStyle = styleMatch[1].trim();
+      if (!/max-width/i.test(existingStyle)) {
+        existingStyle += '; max-width: 100%';
+      }
+      if (!/height/i.test(existingStyle)) {
+        existingStyle += '; height: auto';
+      }
+      if (!/-ms-interpolation-mode/i.test(existingStyle)) {
+        existingStyle += '; -ms-interpolation-mode: bicubic';
+      }
+      newAttrs = newAttrs.replace(/style=["'][^"']+["']/i, `style="${existingStyle}"`);
+    } else {
+      newAttrs = `${newAttrs} style="max-width: 100%; height: auto; -ms-interpolation-mode: bicubic;"`;
+    }
+
+    return `<img ${newAttrs.replace(/\s+/g, ' ').trim()}>`;
   });
 }
 
 /**
+ * Extracts all <img> src URLs from an HTML document or snippet.
+ * Returns unique, normalized URLs.
+ */
+export function extractImageUrlsFromHtml(html?: string | null): string[] {
+  if (!html || typeof html !== 'string') return [];
+  const matches = Array.from(html.matchAll(/<img[^>]+src=["']([^"']+)["']/gi));
+  const urls: string[] = [];
+  for (const m of matches) {
+    const raw = m[1]?.trim();
+    if (raw) {
+      urls.push(normalizeImageUrl(raw));
+    }
+  }
+  return Array.from(new Set(urls));
+}
+
+/**
  * Validates email HTML images before sending:
- * Checks whether any <img> tags use un-hosted data:, blob:, file:, or localhost URLs.
+ * Checks whether any <img> tags use un-hosted data:, blob:, file:, localhost, or relative URLs.
+ * Returns detailed diagnostic information for each invalid image.
  */
 export function validateEmailHtmlImages(html: string): {
   valid: boolean;
   invalidUrls: string[];
+  detailedErrors: { url: string; reason: string; label?: string }[];
   totalImages: number;
+  validUrls: string[];
 } {
   if (!html || typeof html !== 'string') {
-    return { valid: true, invalidUrls: [], totalImages: 0 };
+    return { valid: true, invalidUrls: [], detailedErrors: [], totalImages: 0, validUrls: [] };
   }
 
-  const imgMatches = Array.from(html.matchAll(/<img[^>]+src=["']([^"']+)["']/gi));
+  const imgMatches = Array.from(html.matchAll(/<img([^>]+)>/gi));
   const invalidUrls: string[] = [];
+  const detailedErrors: { url: string; reason: string; label?: string }[] = [];
+  const validUrls: string[] = [];
 
   for (const match of imgMatches) {
-    const src = match[1]?.trim();
-    if (!src) continue;
+    const attrs = match[1] || '';
+    const srcMatch = attrs.match(/src=["']([^"']+)["']/i);
+    const altMatch = attrs.match(/alt=["']([^"']+)["']/i);
+    const label = altMatch ? altMatch[1] : (attrs.includes('logo') ? 'Logo' : 'Image');
 
-    if (
-      src.startsWith('data:') ||
-      src.startsWith('blob:') ||
-      src.startsWith('file:') ||
-      src.includes('localhost') ||
-      src.includes('127.0.0.1')
-    ) {
-      invalidUrls.push(src.length > 60 ? `${src.slice(0, 60)}...` : src);
+    const src = srcMatch ? srcMatch[1].trim() : '';
+    if (!src) {
+      detailedErrors.push({
+        url: '(empty src)',
+        reason: 'Image tag has missing or empty src attribute',
+        label,
+      });
+      invalidUrls.push('(empty src)');
+      continue;
+    }
+
+    if (src.startsWith('data:')) {
+      const displayUrl = src.length > 50 ? `${src.slice(0, 50)}...` : src;
+      invalidUrls.push(displayUrl);
+      detailedErrors.push({
+        url: displayUrl,
+        reason: 'Base64 data URL is blocked by email clients (Gmail, Outlook). Must be uploaded to persistent storage.',
+        label,
+      });
+    } else if (src.startsWith('blob:')) {
+      invalidUrls.push(src);
+      detailedErrors.push({
+        url: src,
+        reason: 'Temporary blob URL is only visible in your local browser session and cannot be opened by email recipients.',
+        label,
+      });
+    } else if (src.startsWith('file:')) {
+      invalidUrls.push(src);
+      detailedErrors.push({
+        url: src,
+        reason: 'Local file URL is not accessible over the internet.',
+        label,
+      });
+    } else if (src.includes('localhost') || src.includes('127.0.0.1')) {
+      invalidUrls.push(src);
+      detailedErrors.push({
+        url: src,
+        reason: 'Localhost URL cannot be loaded by external email recipients.',
+        label,
+      });
+    } else if (!src.startsWith('http://') && !src.startsWith('https://') && !src.startsWith('cid:')) {
+      invalidUrls.push(src);
+      detailedErrors.push({
+        url: src,
+        reason: 'Relative image URL cannot be resolved by external email clients.',
+        label,
+      });
+    } else {
+      validUrls.push(src);
     }
   }
 
   return {
     valid: invalidUrls.length === 0,
     invalidUrls,
+    detailedErrors,
     totalImages: imgMatches.length,
+    validUrls,
   };
+}
+
+/**
+ * Checks whether a given image URL is accessible without authentication in a browser context.
+ */
+export async function verifyImageUrlAccessible(url: string, timeoutMs = 8000): Promise<{
+  accessible: boolean;
+  statusText?: string;
+  isImage?: boolean;
+}> {
+  if (typeof window === 'undefined' || !url) {
+    return { accessible: true };
+  }
+
+  // Pre-filter invalid formats
+  if (isLocalOrDataUrl(url)) {
+    return {
+      accessible: false,
+      statusText: 'Image is a local or un-hosted URL (Base64/blob/localhost).',
+    };
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const img = new Image();
+
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve({
+          accessible: false,
+          statusText: 'Request timed out loading image.',
+        });
+      }
+    }, timeoutMs);
+
+    img.onload = () => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        resolve({ accessible: true, isImage: true });
+      }
+    };
+
+    img.onerror = () => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        resolve({
+          accessible: false,
+          statusText: 'Image failed to load (HTTP error, CORS block, or invalid format).',
+        });
+      }
+    };
+
+    img.src = url;
+  });
 }

@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { EmailTemplate } from '@/types/email';
 import { listEmailTemplates, deleteEmailTemplate, previewEmail } from '@/lib/email-api';
+import { sanitizeEmailHtmlImageUrls } from '@/lib/image-utils';
 import { useToast } from '@/components/ui/Toast';
 import EmailPreviewModal from './EmailPreviewModal';
 import ModernTemplateEditor from './ModernTemplateEditor';
@@ -116,6 +117,7 @@ export default function TemplateManager() {
         mode: 'template',
         template_id: tmpl.template_id,
         subject: tmpl.subject,
+        content: tmpl.content ? sanitizeEmailHtmlImageUrls(tmpl.content) : undefined,
         variables: mockVars,
       });
 
@@ -131,10 +133,12 @@ export default function TemplateManager() {
           renderedSubj = renderedSubj.replace(rg, v);
         });
 
+        const safeHtml = sanitizeEmailHtmlImageUrls(renderedHtml);
+
         setPreviewData({
           subject: renderedSubj,
-          html: renderedHtml,
-          text: renderedHtml.replace(/<[^>]*>/g, ''),
+          html: safeHtml,
+          text: safeHtml.replace(/<[^>]*>/g, ''),
           content_type: 'HTML',
           attachments: [],
         });

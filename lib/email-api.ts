@@ -134,11 +134,13 @@ export async function uploadEmailImage(
           };
           if (token) {
             fetchHeaders['Authorization'] = `Bearer ${token}`;
+            fetchHeaders['x-auth-token'] = token;
           }
 
           const fetchRes = await fetch(`${API_BASE_URL}${ep}`, {
             method: 'POST',
             headers: fetchHeaders,
+            credentials: 'include',
             body: fetchFormData,
           });
 
@@ -319,6 +321,7 @@ export async function replaceTemplateBase64Images(
 
   let updatedContent = content;
   let replacedCount = 0;
+  const replacedMap = new Map<string, string>();
 
   for (let i = 0; i < base64Matches.length; i++) {
     const dataUrl = base64Matches[i];
@@ -328,6 +331,7 @@ export async function replaceTemplateBase64Images(
     const uploadRes = await uploadEmailImage(file);
     if (uploadRes.success && uploadRes.data?.url) {
       const publicHttpsUrl = normalizeImageUrl(uploadRes.data.url);
+      replacedMap.set(dataUrl, publicHttpsUrl);
       updatedContent = updatedContent.replaceAll(dataUrl, publicHttpsUrl);
       replacedCount++;
     } else {
@@ -340,19 +344,15 @@ export async function replaceTemplateBase64Images(
     }
   }
 
-  // Also update embedded metadata comment if present
+  // Also update embedded metadata comment if present using the exact URL replacement map
   const metaMatch = updatedContent.match(/<!-- CAMPAIGN_STUDIO_DATA: (.*?) -->/);
   if (metaMatch && metaMatch[1]) {
     try {
       const parsed = JSON.parse(metaMatch[1]);
       if (Array.isArray(parsed.elements)) {
         parsed.elements = parsed.elements.map((el: any) => {
-          if (el.imageUrl && isDataUrl(el.imageUrl)) {
-            // Find replaced URL in updatedContent
-            const imgMatch = updatedContent.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["']/i);
-            if (imgMatch && imgMatch[1]) {
-              return { ...el, imageUrl: imgMatch[1] };
-            }
+          if (el.imageUrl && replacedMap.has(el.imageUrl)) {
+            return { ...el, imageUrl: replacedMap.get(el.imageUrl) };
           }
           return el;
         });

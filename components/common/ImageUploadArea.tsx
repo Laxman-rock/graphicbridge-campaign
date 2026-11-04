@@ -105,9 +105,10 @@ export default function ImageUploadArea({
 
       // 2. Upload to backend API to obtain a stable, public HTTPS URL
       const res = await uploadEmailImage(optimizedFile);
+      const candidateUrl = res.data?.url || (res.data?.urls && res.data.urls[0]);
 
-      if (res.success && res.data?.url) {
-        const publicUrl = normalizeImageUrl(res.data.url);
+      if (res.success && candidateUrl) {
+        const publicUrl = normalizeImageUrl(candidateUrl);
         setLocalPreview(null);
         onChange(publicUrl, file.name);
         setErrorMessage(null);
@@ -151,8 +152,9 @@ export default function ImageUploadArea({
       }
 
       const res = await uploadEmailImage(file);
-      if (res.success && res.data?.url) {
-        const publicUrl = normalizeImageUrl(res.data.url);
+      const candidateUrl = res.data?.url || (res.data?.urls && res.data.urls[0]);
+      if (res.success && candidateUrl) {
+        const publicUrl = normalizeImageUrl(candidateUrl);
         setLocalPreview(null);
         onChange(publicUrl, currentFilename);
         toastSuccess('Image hosted successfully on public HTTPS!', 'Upload Succeeded');

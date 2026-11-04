@@ -38,6 +38,7 @@ import {
   validateEmailHtmlImages,
   sanitizeEmailHtmlImageUrls,
   normalizeImageUrl,
+  extractImageUrlsFromHtml,
 } from '@/lib/image-utils';
 import { useToast } from '@/components/ui/Toast';
 import CsvImporter from '@/components/campaign/CsvImporter';
@@ -240,19 +241,31 @@ export default function EmailCampaignWizard({
 
     try {
       let res: EmailPreviewResponse;
+      const selectedTmpl = templates.find((t) => t.template_id === selectedTemplateId);
+
       if (mode === 'template') {
+        const resolvedTmplContent = selectedTmpl?.content
+          ? sanitizeEmailHtmlImageUrls(selectedTmpl.content)
+          : undefined;
+
         res = await previewEmail({
           mode: 'template',
           template_id: selectedTemplateId,
           subject: templateSubject || undefined,
+          content: resolvedTmplContent,
           variables: sampleVars,
         });
       } else {
+        const sanitizedCustom = sanitizeEmailHtmlImageUrls(customContent);
+        const allCustomImages = Array.from(
+          new Set([...extractImageUrlsFromHtml(sanitizedCustom), ...images.map((u) => normalizeImageUrl(u))])
+        );
+
         res = await previewEmail({
           mode: 'custom',
           subject: customSubject,
-          content: customContent,
-          images,
+          content: sanitizedCustom,
+          images: allCustomImages,
           attachments,
         });
       }
@@ -261,7 +274,7 @@ export default function EmailCampaignWizard({
         setPreviewData(res.data);
       } else {
         // Fallback local renderer if server preview API encounters missing template
-        let renderedHtml = mode === 'template' ? '<p>Template Content</p>' : customContent;
+        let renderedHtml = mode === 'template' ? (selectedTmpl?.content || '<p>Template Content</p>') : customContent;
         let renderedSubj = mode === 'template' ? templateSubject : customSubject;
         Object.entries(sampleVars).forEach(([k, v]) => {
           const rg = new RegExp(`\\{\\{${k}\\}\\}`, 'g');
@@ -269,10 +282,12 @@ export default function EmailCampaignWizard({
           renderedSubj = renderedSubj.replace(rg, v);
         });
 
+        const safeRenderedHtml = sanitizeEmailHtmlImageUrls(renderedHtml);
+
         setPreviewData({
           subject: renderedSubj,
-          html: renderedHtml,
-          text: renderedHtml.replace(/<[^>]*>/g, ''),
+          html: safeRenderedHtml,
+          text: safeRenderedHtml.replace(/<[^>]*>/g, ''),
           content_type: 'HTML',
           attachments: attachments,
         });
@@ -402,9 +417,10 @@ export default function EmailCampaignWizard({
                 )
               );
             } else {
+              const firstErr = imgValidation.detailedErrors?.[0];
               toastError(
-                `The selected template contains ${imgValidation.invalidUrls.length} un-hosted local image(s). Auto-hosting failed: ${fixRes.error || 'Server storage upload failed'}. Recipients in Gmail and Outlook will see broken icons. Please host them before sending.`,
-                'Un-hosted Images Detected'
+                `The selected template contains un-hosted image (${firstErr?.label || firstErr?.url || 'image'}). Auto-hosting failed: ${fixRes.error || 'Server storage upload failed'}. Recipients in Gmail and Outlook will see broken icons. Please host or replace this image before sending.`,
+                'Un-hosted Image Detected'
               );
               setIsSubmitting(false);
               return;
@@ -412,9 +428,27 @@ export default function EmailCampaignWizard({
           }
         }
 
+        // Post-verification: Ensure NO un-hosted images remain before sending
+        if (resolvedTmplContent) {
+          const postCheck = validateEmailHtmlImages(resolvedTmplContent);
+          if (!postCheck.valid) {
+            const firstErr = postCheck.detailedErrors?.[0];
+            toastError(
+              `Sending blocked: Image "${firstErr?.label || firstErr?.url}" is not accessible over public HTTPS. Reason: ${firstErr?.reason || 'Invalid format'}.`,
+              'Image Validation Failed'
+            );
+            setIsSubmitting(false);
+            return;
+          }
+        }
+
         const sanitizedTmplContent = resolvedTmplContent
           ? sanitizeEmailHtmlImageUrls(resolvedTmplContent)
           : undefined;
+
+        // Extract all hosted image URLs from template HTML so the email dispatch worker has full image inventory
+        const extractedImages = sanitizedTmplContent ? extractImageUrlsFromHtml(sanitizedTmplContent) : [];
+        const combinedImages = Array.from(new Set([...extractedImages, ...images.map((u) => normalizeImageUrl(u))]));
 
         payload = {
           campaign_name: campaignName.trim(),
@@ -424,7 +458,7 @@ export default function EmailCampaignWizard({
           content: sanitizedTmplContent,
           recipients,
           variables: buildGlobalVariables(),
-          images: images.map((u) => normalizeImageUrl(u)),
+          images: combinedImages,
           attachments,
         };
       } else {
@@ -446,16 +480,30 @@ export default function EmailCampaignWizard({
             customContentToSend = fixRes.newContent;
             setCustomContent(fixRes.newContent);
           } else {
+            const firstErr = imgValidation.detailedErrors?.[0];
             toastError(
-              `The email body contains un-hosted local image(s). Auto-hosting failed: ${fixRes.error || 'Storage upload failed'}. Recipients will see broken image icons.`,
-              'Un-hosted Images Detected'
+              `The email body contains un-hosted image (${firstErr?.label || firstErr?.url || 'image'}). Auto-hosting failed: ${fixRes.error || 'Storage upload failed'}. Recipients will see broken image icons.`,
+              'Un-hosted Image Detected'
             );
             setIsSubmitting(false);
             return;
           }
         }
 
+        const postCheck = validateEmailHtmlImages(customContentToSend);
+        if (!postCheck.valid) {
+          const firstErr = postCheck.detailedErrors?.[0];
+          toastError(
+            `Sending blocked: Image "${firstErr?.label || firstErr?.url}" is not accessible over public HTTPS. Reason: ${firstErr?.reason || 'Invalid format'}.`,
+            'Image Validation Failed'
+          );
+          setIsSubmitting(false);
+          return;
+        }
+
         const sanitizedCustomContent = sanitizeEmailHtmlImageUrls(customContentToSend);
+        const extractedImages = extractImageUrlsFromHtml(sanitizedCustomContent);
+        const combinedImages = Array.from(new Set([...extractedImages, ...images.map((u) => normalizeImageUrl(u))]));
 
         payload = {
           campaign_name: campaignName.trim(),
@@ -463,7 +511,7 @@ export default function EmailCampaignWizard({
           subject: customSubject.trim(),
           content: sanitizedCustomContent,
           recipients,
-          images: images.map((u) => normalizeImageUrl(u)),
+          images: combinedImages,
           attachments,
         };
       }
@@ -943,7 +991,7 @@ export default function EmailCampaignWizard({
                   onChange={setImages}
                   onInsertIntoContent={(url) => {
                     const safeUrl = normalizeImageUrl(url);
-                    const tag = `<p><img src="${safeUrl}" alt="Campaign Image" border="0" style="max-width:100%; height:auto; display:block; outline:none; text-decoration:none; -ms-interpolation-mode:bicubic;" /></p>`;
+                    const tag = `<p><img src="${safeUrl}" alt="Campaign Image" width="600" border="0" style="max-width:100%; height:auto; display:block; outline:none; text-decoration:none; -ms-interpolation-mode:bicubic;" /></p>`;
                     setCustomContent((prev) => prev + '\n' + tag);
                     toastSuccess('Image HTML inserted into email body.', 'Inserted');
                   }}
