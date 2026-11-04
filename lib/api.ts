@@ -4,7 +4,7 @@ import { getAuthToken, clearAuthSession } from './auth';
 
 const RAW_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ||
-  'https://gb-billing-server-staging-408163079626.asia-southeast1.run.app';
+  'https://gb-billing-server-on-408163079626.asia-south2.run.app';
 
 // Ensure no trailing slash
 export const API_BASE_URL = RAW_BASE_URL.replace(/\/+$/, '');
