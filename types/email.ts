@@ -88,6 +88,7 @@ export interface CreateTemplateCampaignRequest {
   variables?: Record<string, string>;
   images?: string[];
   attachments?: EmailAttachment[];
+  total_recipients?: number;
 }
 
 export interface CreateCustomCampaignRequest {
@@ -99,6 +100,7 @@ export interface CreateCustomCampaignRequest {
   variables?: Record<string, string>;
   images?: string[];
   attachments?: EmailAttachment[];
+  total_recipients?: number;
 }
 
 export type CreateEmailCampaignRequest =

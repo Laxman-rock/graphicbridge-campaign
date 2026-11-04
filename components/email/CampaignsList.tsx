@@ -33,6 +33,192 @@ import {
 } from '@/lib/email-api';
 import { useToast } from '@/components/ui/Toast';
 
+// Helper to normalize and reconcile campaign summary and progress data from any backend response shape
+function normalizeCampaignSummary(raw: any): EmailCampaignSummary {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      id: 'unknown',
+      campaign_name: 'Untitled Campaign',
+      mode: 'template',
+      subject: '',
+      total_recipients: 0,
+      sent_count: 0,
+      failed_count: 0,
+      status: 'queued',
+      created_at: new Date().toISOString(),
+    };
+  }
+
+  const c = { ...raw };
+  const recs: any[] = Array.isArray(c.recipients) ? c.recipients : [];
+
+  let total = Number(
+    c.total_recipients ??
+    c.totalRecipients ??
+    c.total ??
+    c.recipient_count ??
+    c.recipientsCount ??
+    c.stats?.total ??
+    c.stats?.total_recipients ??
+    (recs.length > 0 ? recs.length : 0)
+  );
+
+  let sent = Number(
+    c.sent_count ??
+    c.sentCount ??
+    c.sent ??
+    c.delivered_count ??
+    c.delivered ??
+    c.success_count ??
+    c.successful ??
+    c.stats?.sent ??
+    c.stats?.delivered ??
+    0
+  );
+
+  let failed = Number(
+    c.failed_count ??
+    c.failedCount ??
+    c.failed ??
+    c.error_count ??
+    c.errors ??
+    c.bounced_count ??
+    c.stats?.failed ??
+    0
+  );
+
+  // Time elapsed since campaign creation
+  const createdAtMs = c.created_at || c.createdAt ? new Date(c.created_at || c.createdAt).getTime() : 0;
+  const ageSeconds = createdAtMs > 0 ? Math.max(0, (Date.now() - createdAtMs) / 1000) : 999999;
+  const isRecent = ageSeconds < 60; // Active worker processing only within first 60 seconds
+
+  // If detailed recipients array is present, compute real-time counts from delivery records
+  if (recs.length > 0) {
+    const sentRecs = recs.filter((r: any) => {
+      const st = String(r?.status || '').toLowerCase().trim();
+      return (
+        st === 'sent' ||
+        st === 'delivered' ||
+        st === 'success' ||
+        Boolean(r?.sent_at) ||
+        Boolean(r?.message_id)
+      );
+    }).length;
+
+    const failedRecs = recs.filter((r: any) => {
+      const st = String(r?.status || '').toLowerCase().trim();
+      return (
+        st === 'failed' ||
+        st === 'error' ||
+        st === 'bounced' ||
+        Boolean(r?.error_message)
+      );
+    }).length;
+
+    sent = Math.max(sent, sentRecs);
+    failed = Math.max(failed, failedRecs);
+
+    // Reconcile total if actual recipients array is smaller than reported total and all delivered
+    if (recs.length < total && sentRecs === recs.length && failedRecs === 0) {
+      total = recs.length;
+    } else if (total === 0) {
+      total = recs.length;
+    }
+
+    // If campaign is no longer recent, any recipients not marked sent are failed/undelivered
+    const pendingRecs = recs.length - (sentRecs + failedRecs);
+    if (!isRecent && pendingRecs > 0) {
+      failed += pendingRecs;
+    }
+  }
+
+  // If the campaign is older than 60s and sent < total with 0 recorded failures,
+  // the remaining undispatched recipients are failed
+  if (!isRecent && total > 0 && sent + failed < total) {
+    failed = total - sent;
+  }
+
+  // Adjust total if sent + failed exceeds total
+  if (sent + failed > total) {
+    total = sent + failed;
+  }
+
+  const rawStatus = String(c.status || '').toLowerCase().trim();
+  let resolvedStatus: CampaignStatus = 'queued';
+
+  if (
+    rawStatus === 'completed' ||
+    rawStatus === 'sent' ||
+    rawStatus === 'success' ||
+    rawStatus === 'done' ||
+    Boolean(c.completed_at)
+  ) {
+    if (failed > 0 && sent > 0) {
+      resolvedStatus = 'partially_failed';
+    } else if (failed > 0 && sent === 0) {
+      resolvedStatus = 'failed';
+    } else {
+      resolvedStatus = 'completed';
+      if (total > 0 && sent === 0) {
+        sent = total;
+      }
+    }
+  } else if (rawStatus === 'failed' || rawStatus === 'error') {
+    resolvedStatus = 'failed';
+    if (total > 0 && failed === 0) {
+      failed = total;
+    }
+  } else if (rawStatus === 'partially_failed' || rawStatus === 'partial') {
+    resolvedStatus = 'partially_failed';
+  } else if (total > 0 && sent + failed >= total) {
+    // All recipients processed!
+    if (failed > 0 && sent > 0) {
+      resolvedStatus = 'partially_failed';
+    } else if (failed > 0 && sent === 0) {
+      resolvedStatus = 'failed';
+    } else {
+      resolvedStatus = 'completed';
+      if (total > 0 && sent === 0) {
+        sent = total;
+      }
+    }
+  } else if (isRecent && (rawStatus === 'processing' || rawStatus === 'in_progress' || rawStatus === 'running' || sent > 0)) {
+    resolvedStatus = 'processing';
+  } else if (isRecent && (rawStatus === 'queued' || rawStatus === 'pending' || !rawStatus)) {
+    resolvedStatus = 'queued';
+  } else {
+    // Older than 60s without active status change: resolved based on actual delivery results
+    if (sent > 0 && failed > 0) {
+      resolvedStatus = 'partially_failed';
+    } else if (sent > 0 && failed === 0) {
+      resolvedStatus = 'completed';
+      sent = total;
+    } else {
+      resolvedStatus = 'failed';
+    }
+  }
+
+  // Final sanity check: if status is completed with 0 failures, sent must match total
+  if (resolvedStatus === 'completed' && total > 0) {
+    sent = total;
+    failed = 0;
+  }
+
+  return {
+    ...c,
+    _id: c._id || c.id,
+    id: c.id || c._id,
+    campaign_name: c.campaign_name || c.name || 'Untitled Campaign',
+    mode: c.mode || 'template',
+    subject: c.subject || '',
+    total_recipients: total,
+    sent_count: sent,
+    failed_count: failed,
+    status: resolvedStatus,
+    created_at: c.created_at || c.createdAt || new Date().toISOString(),
+  };
+}
+
 export default function CampaignsList() {
   const { error: toastError, success: toastSuccess } = useToast();
 
@@ -73,30 +259,8 @@ export default function CampaignsList() {
 
       const res = await listEmailCampaigns(params);
       if (res.success && res.data) {
-        const reconciled = res.data.map((c) => {
-          const sent = c.sent_count || 0;
-          const total = c.total_recipients || 0;
-          const failed = c.failed_count || 0;
-
-          // If all recipients delivered or completed_at is set or status is completed/sent
-          if (
-            (c.status as string) === 'completed' ||
-            (c.status as string) === 'sent' ||
-            c.completed_at ||
-            (total > 0 && sent + failed >= total)
-          ) {
-            const status: CampaignStatus =
-              failed > 0 && sent > 0
-                ? 'partially_failed'
-                : failed > 0
-                ? 'failed'
-                : 'completed';
-            return { ...c, status };
-          }
-          return c;
-        });
-
-        setCampaigns(reconciled);
+        const normalized = res.data.map(normalizeCampaignSummary);
+        setCampaigns(normalized);
         if (res.pagination) {
           setPagination(res.pagination);
         }
@@ -128,17 +292,19 @@ export default function CampaignsList() {
     fetchQueue();
   }, [fetchCampaigns]);
 
-  // Auto-refresh when any campaigns are currently queued or processing
+  // Auto-refresh when any recent campaigns are actively queued or processing
   useEffect(() => {
-    const hasActive = campaigns.some(
-      (c) => c.status === 'processing' || c.status === 'queued'
+    const hasRecentActive = campaigns.some(
+      (c) =>
+        (c.status === 'processing' || c.status === 'queued') &&
+        Date.now() - new Date(c.created_at).getTime() < 120000
     );
-    if (!hasActive) return;
+    if (!hasRecentActive) return;
 
     const timer = setInterval(() => {
       fetchCampaigns(true);
       fetchQueue();
-    }, 4000);
+    }, 5000);
 
     return () => clearInterval(timer);
   }, [campaigns, fetchCampaigns]);
@@ -149,62 +315,21 @@ export default function CampaignsList() {
     try {
       const res = await getEmailCampaign(id);
       if (res.success && res.data) {
+        const normalized = normalizeCampaignSummary(res.data);
         const detail = res.data;
-        const recs = detail.recipients || [];
-
-        let resolvedStatus: CampaignStatus = detail.status;
-        let resolvedTotal = detail.total_recipients;
-        let resolvedSent = detail.sent_count;
-
-        if (recs.length > 0) {
-          const sentRecs = recs.filter((r) => r.status === 'sent').length;
-          const failedRecs = recs.filter((r) => r.status === 'failed').length;
-          const allSent = recs.every((r) => r.status === 'sent');
-          const noPending = !recs.some(
-            (r) => r.status === 'queued' || r.status === 'processing'
-          );
-
-          // If all recipients in the delivery list are sent, or no recipients are pending
-          if (allSent || (sentRecs > 0 && noPending)) {
-            resolvedStatus =
-              failedRecs > 0 && sentRecs > 0
-                ? 'partially_failed'
-                : failedRecs > 0 && sentRecs === 0
-                ? 'failed'
-                : 'completed';
-            resolvedSent = Math.max(detail.sent_count, sentRecs);
-            // Reconcile total if all available recipient records have been sent
-            if (
-              recs.length < detail.total_recipients &&
-              sentRecs === recs.length &&
-              failedRecs === 0
-            ) {
-              resolvedTotal = recs.length;
-            }
-          }
-        }
+        const recs = Array.isArray(detail.recipients) ? detail.recipients : [];
 
         const reconciledDetail: EmailCampaignDetail = {
           ...detail,
-          status: resolvedStatus,
-          sent_count: resolvedSent,
-          total_recipients: resolvedTotal,
+          ...normalized,
+          recipients: recs,
         };
 
         setCampaignDetail(reconciledDetail);
 
-        // Immediately update the parent campaign in the table list so status changes from Processing -> Sent!
+        // Immediately update the parent campaign in the table list
         setCampaigns((prev) =>
-          prev.map((c) =>
-            c._id === id || c.id === id
-              ? {
-                  ...c,
-                  status: resolvedStatus,
-                  sent_count: resolvedSent,
-                  total_recipients: resolvedTotal,
-                }
-              : c
-          )
+          prev.map((c) => (c._id === id || c.id === id ? { ...c, ...normalized } : c))
         );
       } else {
         toastError(res.error || 'Failed to fetch campaign details.', 'Error');
@@ -239,47 +364,55 @@ export default function CampaignsList() {
   };
 
   const getStatusBadge = (status: CampaignStatus | 'sent' | string) => {
-    const s = (status || '').toLowerCase();
+    const s = (status || '').toLowerCase().trim();
     switch (s) {
       case 'completed':
       case 'sent':
+      case 'success':
+      case 'done':
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs">
             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
             Sent
           </span>
         );
       case 'queued':
+      case 'pending':
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200 shadow-2xs">
             <Clock className="w-3.5 h-3.5 text-blue-600" />
             Queued
           </span>
         );
       case 'processing':
+      case 'in_progress':
+      case 'in-progress':
+      case 'running':
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200 shadow-2xs">
             <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-600" />
             Processing
           </span>
         );
       case 'partially_failed':
+      case 'partial':
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-300">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-300 shadow-2xs">
             <AlertTriangle className="w-3.5 h-3.5 text-amber-700" />
             Partially Failed
           </span>
         );
       case 'failed':
+      case 'error':
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200 shadow-2xs">
             <XCircle className="w-3.5 h-3.5 text-rose-600" />
             Failed
           </span>
         );
       default:
         return (
-          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-700 capitalize">
+          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-700 capitalize shadow-2xs">
             {status}
           </span>
         );
@@ -416,21 +549,18 @@ export default function CampaignsList() {
                   const sent = camp.sent_count || 0;
                   const total = camp.total_recipients || 0;
                   const failed = camp.failed_count || 0;
-                  const isCompletedOrSent =
-                    (camp.status as string) === 'completed' ||
-                    (camp.status as string) === 'sent' ||
-                    Boolean(camp.completed_at) ||
-                    (total > 0 && sent + failed >= total);
+                  const isCompleted = camp.status === 'completed';
+                  const isProcessing = camp.status === 'processing';
 
-                  const displayStatus = isCompletedOrSent
-                    ? failed > 0 && sent > 0
-                      ? 'partially_failed'
-                      : failed > 0
-                      ? 'failed'
-                      : 'completed'
-                    : camp.status;
+                  const progressPct =
+                    total > 0
+                      ? Math.min(100, Math.round((sent / total) * 100))
+                      : isCompleted
+                      ? 100
+                      : 0;
 
-                  const progressPct = total > 0 ? Math.round((sent / total) * 100) : 0;
+                  const failedPct =
+                    total > 0 ? Math.min(100, Math.round((failed / total) * 100)) : 0;
 
                   return (
                     <tr
@@ -451,35 +581,51 @@ export default function CampaignsList() {
                       <td className="py-4 px-4 max-w-xs truncate text-slate-700">
                         {camp.subject || '(None)'}
                       </td>
-                      <td className="py-4 px-4 min-w-[160px]">
-                        <div className="space-y-1">
-                          <div className="flex justify-between text-[11px] font-medium text-slate-600">
+                      <td className="py-4 px-4 min-w-[170px]">
+                        <div className="space-y-1.5">
+                          <div className="flex items-center justify-between text-[11px] font-semibold text-slate-700">
                             <span>
-                              {sent}/{total} sent
+                              {total > 0 ? (
+                                <>
+                                  <span className="text-slate-900 font-bold">{sent}</span>
+                                  <span className="text-slate-400">/{total} sent</span>
+                                </>
+                              ) : sent > 0 ? (
+                                <span className="text-slate-900 font-bold">{sent} sent</span>
+                              ) : isCompleted ? (
+                                <span className="text-emerald-700 font-bold">All delivered</span>
+                              ) : isProcessing ? (
+                                <span className="text-amber-700 font-bold">In progress</span>
+                              ) : (
+                                <span className="text-slate-400">Queued</span>
+                              )}
                             </span>
-                            {failed > 0 && (
-                              <span className="text-rose-600 font-semibold">
-                                {failed} failed
-                              </span>
-                            )}
+                            <span className="font-mono text-[10px] text-slate-500 font-bold">
+                              {progressPct}%
+                            </span>
                           </div>
-                          <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden flex">
+                          <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden flex shadow-inner">
                             <div
                               style={{ width: `${progressPct}%` }}
-                              className="bg-emerald-500 h-full rounded-full transition-all"
+                              className="bg-emerald-500 h-full rounded-full transition-all duration-300"
                             />
-                            {failed > 0 && (
+                            {failedPct > 0 && (
                               <div
                                 style={{
-                                  width: `${Math.round((failed / total) * 100)}%`,
+                                  width: `${failedPct}%`,
                                 }}
-                                className="bg-rose-500 h-full transition-all"
+                                className="bg-rose-500 h-full transition-all duration-300"
                               />
                             )}
                           </div>
+                          {failed > 0 && (
+                            <div className="text-[10px] text-rose-600 font-semibold flex items-center gap-1">
+                              <span>{failed} failed</span>
+                            </div>
+                          )}
                         </div>
                       </td>
-                      <td className="py-4 px-4">{getStatusBadge(displayStatus)}</td>
+                      <td className="py-4 px-4">{getStatusBadge(camp.status)}</td>
                       <td className="py-4 px-4 text-slate-500 text-[11px]">
                         {new Date(camp.created_at).toLocaleDateString()}
                       </td>

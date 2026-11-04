@@ -457,6 +457,7 @@ export default function EmailCampaignWizard({
           subject: templateSubject || undefined,
           content: sanitizedTmplContent,
           recipients,
+          total_recipients: recipients.length,
           variables: buildGlobalVariables(),
           images: combinedImages,
           attachments,
@@ -511,6 +512,7 @@ export default function EmailCampaignWizard({
           subject: customSubject.trim(),
           content: sanitizedCustomContent,
           recipients,
+          total_recipients: recipients.length,
           images: combinedImages,
           attachments,
         };

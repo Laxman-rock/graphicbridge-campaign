@@ -24,6 +24,8 @@ import {
   CreateTemplateRequest,
   UpdateTemplateRequest,
   TemplateActionResponse,
+  EmailCampaignSummary,
+  EmailCampaignDetail,
 } from '@/types/email';
 
 export function extractErrorMessage(err: unknown, defaultMsg: string): string {
@@ -398,10 +400,37 @@ export async function listEmailCampaigns(
   params?: CampaignListParams
 ): Promise<CampaignListResponse> {
   try {
-    const res = await apiClient.get<CampaignListResponse>('/api/email/campaigns', {
-      params,
-    });
-    return res.data;
+    let res;
+    try {
+      res = await apiClient.get<any>('/api/email/campaigns', { params });
+    } catch (err: any) {
+      if (err?.response?.status === 404) {
+        res = await apiClient.get<any>('/email/campaigns', { params });
+      } else {
+        throw err;
+      }
+    }
+
+    const raw = res.data;
+    let campaigns: EmailCampaignSummary[] = [];
+
+    if (Array.isArray(raw)) {
+      campaigns = raw;
+    } else if (raw && Array.isArray(raw.data)) {
+      campaigns = raw.data;
+    } else if (raw && Array.isArray(raw.campaigns)) {
+      campaigns = raw.campaigns;
+    } else if (raw && Array.isArray(raw.items)) {
+      campaigns = raw.items;
+    } else if (raw && raw.success && Array.isArray(raw.data)) {
+      campaigns = raw.data;
+    }
+
+    return {
+      success: raw?.success ?? true,
+      data: campaigns,
+      pagination: raw?.pagination || raw?.meta,
+    };
   } catch (err) {
     return {
       success: false,
@@ -418,8 +447,34 @@ export async function getEmailCampaign(
   id: string | number
 ): Promise<GetCampaignResponse> {
   try {
-    const res = await apiClient.get<GetCampaignResponse>(`/api/email/campaigns/${id}`);
-    return res.data;
+    let res;
+    try {
+      res = await apiClient.get<any>(`/api/email/campaigns/${id}`);
+    } catch (err: any) {
+      if (err?.response?.status === 404) {
+        res = await apiClient.get<any>(`/email/campaigns/${id}`);
+      } else {
+        throw err;
+      }
+    }
+
+    const raw = res.data;
+    let detail: EmailCampaignDetail | undefined;
+
+    if (raw && typeof raw === 'object') {
+      if (raw.data && typeof raw.data === 'object' && !Array.isArray(raw.data)) {
+        detail = raw.data;
+      } else if (raw.campaign && typeof raw.campaign === 'object') {
+        detail = raw.campaign;
+      } else if (raw.campaign_name || raw._id || raw.id) {
+        detail = raw as EmailCampaignDetail;
+      }
+    }
+
+    return {
+      success: raw?.success ?? (detail !== undefined),
+      data: detail,
+    };
   } catch (err) {
     return {
       success: false,
