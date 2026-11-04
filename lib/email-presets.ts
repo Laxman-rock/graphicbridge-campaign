@@ -37,7 +37,7 @@ function buildPresetHtml(
           return `
           <tr>
             <td align="${align}" style="padding: ${pY}px 24px; text-align: ${align};">
-              <img src="${el.imageUrl}" alt="${el.altText || 'Logo'}" style="max-height: 48px; width: auto; max-width: 180px; display: inline-block; border: none; outline: none;" />
+              <img src="${el.imageUrl}" alt="${el.altText || 'Logo'}" width="180" border="0" style="max-height: 48px; width: auto; max-width: 180px; display: inline-block; border: 0; outline: none; text-decoration: none; -ms-interpolation-mode: bicubic;" />
             </td>
           </tr>`;
 
@@ -52,7 +52,7 @@ function buildPresetHtml(
                   ? `<a href="${el.url}" target="_blank" style="text-decoration:none; display:block;">`
                   : ''
               }
-              <img src="${el.imageUrl}" alt="${el.altText || 'Banner'}" style="width: 100%; max-width: 100%; height: auto; display: block; border: none; border-radius: ${bannerRadius}; margin: 0 auto;" />
+              <img src="${el.imageUrl}" alt="${el.altText || 'Banner'}" width="600" border="0" style="width: 100%; max-width: 100%; height: auto; display: block; border: 0; border-radius: ${bannerRadius}; margin: 0 auto; outline: none; text-decoration: none; -ms-interpolation-mode: bicubic;" />
               ${el.url ? `</a>` : ''}
             </td>
           </tr>`;
@@ -68,7 +68,7 @@ function buildPresetHtml(
                   ? `<a href="${el.url}" target="_blank" style="text-decoration:none;">`
                   : ''
               }
-              <img src="${el.imageUrl}" alt="${el.altText || 'Image'}" style="max-width: 100%; height: auto; display: inline-block; border: none; border-radius: ${imgRadius};" />
+              <img src="${el.imageUrl}" alt="${el.altText || 'Image'}" width="600" border="0" style="width: 100%; max-width: 100%; height: auto; display: inline-block; border: 0; border-radius: ${imgRadius}; outline: none; text-decoration: none; -ms-interpolation-mode: bicubic;" />
               ${el.url ? `</a>` : ''}
             </td>
           </tr>`;
