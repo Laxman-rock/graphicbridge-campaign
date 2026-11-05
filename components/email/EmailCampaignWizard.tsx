@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   FileSpreadsheet,
   Mail,
@@ -66,7 +66,8 @@ export default function EmailCampaignWizard({
 
   // Templates
   const [templates, setTemplates] = useState<EmailTemplate[]>([]);
-  const [isLoadingTemplates, setIsLoadingTemplates] = useState(false);
+  const [isLoadingTemplates, setIsLoadingTemplates] = useState(true);
+  const [templatesError, setTemplatesError] = useState<string | null>(null);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
   const [templateSubject, setTemplateSubject] = useState('');
   const [isFixingImages, setIsFixingImages] = useState(false);
@@ -100,28 +101,32 @@ export default function EmailCampaignWizard({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [createdResult, setCreatedResult] = useState<any>(null);
 
-  // Fetch templates on mount
-  useEffect(() => {
-    async function loadTemplates() {
-      setIsLoadingTemplates(true);
-      try {
-        const res = await listEmailTemplates();
-        if (res.success && res.data) {
-          setTemplates(res.data);
-          if (res.data.length > 0) {
-            const first = res.data[0];
-            setSelectedTemplateId(first.template_id);
-            setTemplateSubject(first.subject || '');
-          }
+  const loadTemplates = useCallback(async () => {
+    setIsLoadingTemplates(true);
+    try {
+      const res = await listEmailTemplates();
+      if (res.success && Array.isArray(res.data)) {
+        setTemplates(res.data);
+        setTemplatesError(null);
+        if (res.data.length > 0) {
+          const first = res.data[0];
+          setSelectedTemplateId(first.template_id);
+          setTemplateSubject(first.subject || '');
         }
-      } catch {
-        // Silently catch
-      } finally {
-        setIsLoadingTemplates(false);
+      } else {
+        setTemplatesError('We could not load your saved email templates. Please try again.');
       }
+    } catch {
+      setTemplatesError('We could not load your saved email templates. Please try again.');
+    } finally {
+      setIsLoadingTemplates(false);
     }
-    loadTemplates();
   }, []);
+
+  // Fetch templates on mount and allow failed requests to be retried.
+  useEffect(() => {
+    loadTemplates();
+  }, [loadTemplates]);
 
   // When selectedTemplateId changes, update default variable mappings
   useEffect(() => {
@@ -548,6 +553,27 @@ export default function EmailCampaignWizard({
 
   return (
     <div className="space-y-8">
+      {templatesError && (
+        <div role="alert" className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 rounded-2xl border border-rose-200 bg-rose-50">
+          <div className="flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
+            <div>
+              <h3 className="text-sm font-semibold text-rose-900">Email templates could not be loaded</h3>
+              <p className="text-xs text-rose-700 mt-1">{templatesError}</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={loadTemplates}
+            disabled={isLoadingTemplates}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-white border border-rose-200 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-50"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoadingTemplates ? 'animate-spin' : ''}`} />
+            {isLoadingTemplates ? 'Retrying...' : 'Retry loading templates'}
+          </button>
+        </div>
+      )}
+
       {/* Step Progress Tracker */}
       <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-sm">
         <div className="flex items-center justify-between max-w-2xl mx-auto">
@@ -735,7 +761,15 @@ export default function EmailCampaignWizard({
                 )}
               </div>
 
-              {templates.length === 0 ? (
+              {isLoadingTemplates ? (
+                <p role="status" className="p-8 text-center text-xs text-slate-500">
+                  Loading email templates...
+                </p>
+              ) : templatesError ? (
+                <p className="p-8 text-center text-xs text-slate-500">
+                  Templates are unavailable. Use the retry button above to load them again.
+                </p>
+              ) : templates.length === 0 ? (
                 <div className="p-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200 space-y-3">
                   <div className="w-10 h-10 rounded-xl bg-purple-100 text-purple-600 flex items-center justify-center mx-auto">
                     <Sparkles className="w-5 h-5" />

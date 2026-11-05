@@ -78,11 +78,29 @@ npm start
 
 ## 4. Environment Variables Configuration
 
-Create or verify the `.env.local` file in the project root:
+Create or verify the `.env` file in the project root (`.env.local`, if present, overrides it):
 
 ```env
-NEXT_PUBLIC_API_BASE_URL=https://gb-billing-server-staging-408163079626.asia-southeast1.run.app
+NEXT_PUBLIC_API_BASE_URL=https://gb-billing-server-on-408163079626.asia-south2.run.app
 ```
+
+Restart the development server after changing this value. For Firebase Hosting, run `npm run build` and deploy the new `out` directory; Next.js embeds `NEXT_PUBLIC_*` values into the browser bundle at build time.
+
+### Email requests in the browser Network tab
+
+Open DevTools before entering the email module, enable recording and Preserve log, and select Fetch/XHR with the text filter cleared. With a valid login session, these actions issue requests to the configured API base URL:
+
+| Action | Request |
+| --- | --- |
+| Open Email Campaign or Templates | `GET /api/email/templates` |
+| Open Campaigns History | `GET /api/email/campaigns`, `GET /api/email/queue-status` |
+| Open campaign details | `GET /api/email/campaigns/:id` |
+| Generate an email preview | `POST /api/email/preview` |
+| Launch a validated campaign | `POST /api/email/campaigns` |
+
+CSV parsing happens locally and does not send a request. Template-loading failures appear in the wizard with a retry button.
+
+Firebase Hosting must serve each exported page using `cleanUrls: true` in [firebase.json](./firebase.json). A catch-all rewrite to `/index.html` serves the root redirect page for direct visits to `/dashboard/email`, so the email module never mounts on that visit. Keep that rewrite removed, and deploy the hosting configuration together with the build.
 
 ---
 
