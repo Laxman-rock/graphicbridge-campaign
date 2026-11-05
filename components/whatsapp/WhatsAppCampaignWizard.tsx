@@ -18,6 +18,7 @@ import {
   FileText,
   ShieldCheck,
   Code,
+  Info,
 } from 'lucide-react';
 import { CsvImportResult, WhatsAppContactRecord } from '@/types/campaign';
 import {
@@ -29,14 +30,40 @@ import {
 } from '@/types/whatsapp';
 import {
   listWhatsAppTemplates,
+  listMetaWhatsAppTemplates,
   syncWhatsAppTemplates,
   createWhatsAppCampaign,
+  extractTemplateImageHeader,
+  extractTemplateBodyVariables,
 } from '@/lib/whatsapp-api';
 import { WHATSAPP_PRESET_TEMPLATES } from '@/lib/whatsapp-presets';
 import { useToast } from '@/components/ui/Toast';
 import CsvImporter from '@/components/campaign/CsvImporter';
 import ImageUploadArea from '@/components/common/ImageUploadArea';
 import WhatsAppBubblePreview from './WhatsAppBubblePreview';
+
+// Helper to render body message with highlighted variable chips
+function renderHighlightedTemplateBody(text: string) {
+  if (!text) return <span className="text-slate-400 italic">(Empty body message)</span>;
+  const parts = text.split(/(\{\{[0-9a-zA-Z_]+\}\})/g);
+  return (
+    <span>
+      {parts.map((part, i) => {
+        if (/^\{\{[0-9a-zA-Z_]+\}\}$/.test(part)) {
+          return (
+            <span
+              key={i}
+              className="inline-block px-1.5 py-0.5 mx-0.5 rounded font-mono font-bold text-xs bg-emerald-100 text-emerald-800 border border-emerald-300 shadow-2xs"
+            >
+              {part}
+            </span>
+          );
+        }
+        return <span key={i}>{part}</span>;
+      })}
+    </span>
+  );
+}
 
 interface WhatsAppCampaignWizardProps {
   onCampaignCreated?: () => void;
@@ -65,46 +92,72 @@ export default function WhatsAppCampaignWizard({
   const [isLoadingTemplates, setIsLoadingTemplates] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [selectedTemplateName, setSelectedTemplateName] = useState<string>('');
+  const [headerImgError, setHeaderImgError] = useState(false);
 
-  // Variables mapping: for each variable in template (e.g. '1', '2') -> { type: 'column' | 'static', value: string }
+  // Variables mapping: for each variable in template body (e.g. '1', '2') -> { type: 'column' | 'static', value: string }
   const [variableMappings, setVariableMappings] = useState<
     Record<string, { type: 'column' | 'static'; value: string }>
   >({});
+
+  // Media state (for template header image or custom media)
+  const [mediaUrl, setMediaUrl] = useState('');
+  const [mediaCaption, setMediaCaption] = useState('');
 
   // Custom Message Fields
   const [customText, setCustomText] = useState(
     'Hello *{{customer_name}}*,\nWe have an exciting announcement from our team! Check your dashboard for more details.'
   );
-  const [mediaUrl, setMediaUrl] = useState('');
-  const [mediaCaption, setMediaCaption] = useState('');
 
   // Submission State
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [createdResult, setCreatedResult] = useState<any>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  // Load templates on mount
+  // Load approved templates on mount: Prefer live Meta WhatsApp templates (GET /whatsapp/templates/meta)
   useEffect(() => {
     async function loadTemplates() {
       setIsLoadingTemplates(true);
       try {
-        const res = await listWhatsAppTemplates();
+        // Requirement 1: Fetch actual Meta WhatsApp template objects using GET /whatsapp/templates/meta
+        let res = await listMetaWhatsAppTemplates();
+        let loaded: WhatsAppTemplate[] | null = null;
+
         if (res.success && res.data && res.data.length > 0) {
-          setTemplates(res.data);
-          const approved = res.data.filter((t) => t.status === 'APPROVED');
-          if (approved.length > 0) {
-            setSelectedTemplateName(approved[0].name);
-          } else {
-            setSelectedTemplateName(res.data[0].name);
-          }
+          loaded = res.data;
         } else {
-          // Fallback to presets if server has not synced templates yet
-          setTemplates(WHATSAPP_PRESET_TEMPLATES);
-          setSelectedTemplateName(WHATSAPP_PRESET_TEMPLATES[0].name);
+          // Fallback to local synced templates if Meta endpoint returns empty
+          const localRes = await listWhatsAppTemplates();
+          if (localRes.success && localRes.data && localRes.data.length > 0) {
+            loaded = localRes.data;
+          }
+        }
+
+        // Display ONLY templates with status: "APPROVED"
+        const approved = loaded
+          ? loaded.filter((t) => (t.status || '').toUpperCase() === 'APPROVED')
+          : [];
+
+        if (approved.length > 0) {
+          setTemplates(approved);
+          setSelectedTemplateName(approved[0].name);
+        } else {
+          // Fallback to approved starter presets if no approved templates found in Meta account
+          const approvedPresets = WHATSAPP_PRESET_TEMPLATES.filter(
+            (t) => (t.status || '').toUpperCase() === 'APPROVED'
+          );
+          setTemplates(approvedPresets);
+          if (approvedPresets.length > 0) {
+            setSelectedTemplateName(approvedPresets[0].name);
+          }
         }
       } catch {
-        setTemplates(WHATSAPP_PRESET_TEMPLATES);
-        setSelectedTemplateName(WHATSAPP_PRESET_TEMPLATES[0].name);
+        const approvedPresets = WHATSAPP_PRESET_TEMPLATES.filter(
+          (t) => (t.status || '').toUpperCase() === 'APPROVED'
+        );
+        setTemplates(approvedPresets);
+        if (approvedPresets.length > 0) {
+          setSelectedTemplateName(approvedPresets[0].name);
+        }
       } finally {
         setIsLoadingTemplates(false);
       }
@@ -116,15 +169,30 @@ export default function WhatsAppCampaignWizard({
   const handleQuickSync = async () => {
     setIsSyncing(true);
     try {
-      const res = await syncWhatsAppTemplates();
-      if (res.success && res.data) {
-        setTemplates(res.data);
-        if (res.data.length > 0) {
-          setSelectedTemplateName(res.data[0].name);
-        }
-        toastSuccess('Templates synced successfully from Meta.', 'Sync Complete');
+      const syncRes = await syncWhatsAppTemplates();
+      // Re-fetch live Meta templates
+      const metaRes = await listMetaWhatsAppTemplates();
+      const loaded =
+        metaRes.success && metaRes.data && metaRes.data.length > 0
+          ? metaRes.data
+          : syncRes.data;
+
+      const approved = loaded
+        ? loaded.filter((t) => (t.status || '').toUpperCase() === 'APPROVED')
+        : [];
+
+      if (approved.length > 0) {
+        setTemplates(approved);
+        setSelectedTemplateName(approved[0].name);
+        toastSuccess(
+          `Successfully loaded ${approved.length} approved template(s) from Meta.`,
+          'Sync Complete'
+        );
       } else {
-        toastError(res.error || 'Failed to sync templates.', 'Sync Error');
+        toastError(
+          syncRes.error || metaRes.error || 'No approved templates found in Meta account.',
+          'Sync Notice'
+        );
       }
     } catch {
       toastError('Could not sync with Meta API.', 'Error');
@@ -136,29 +204,90 @@ export default function WhatsAppCampaignWizard({
   // When selectedTemplateName changes, update variable mappings & language
   const selectedTemplate = templates.find((t) => t.name === selectedTemplateName);
 
+  // Extract template details
+  const headerInfo = extractTemplateImageHeader(selectedTemplate);
+  const hasImageHeader = headerInfo.hasImageHeader;
+  const headerFormat = headerInfo.headerFormat;
+  const exampleImageUrl = headerInfo.exampleImageUrl;
+
+  // Active header image: user uploaded custom image takes precedence, then example image from template
+  const activeHeaderImageUrl = mediaUrl || exampleImageUrl || '';
+
+  // Body component & text
+  const bodyComp = selectedTemplate?.components?.find((c) => c.type === 'BODY');
+  const bodyText = bodyComp?.text || '';
+
+  // Footer text
+  const footerComp = selectedTemplate?.components?.find((c) => c.type === 'FOOTER');
+  const footerText = footerComp?.text || '';
+
+  // Buttons
+  const buttonsComp = selectedTemplate?.components?.find((c) => c.type === 'BUTTONS');
+  const buttons = buttonsComp?.buttons || [];
+
+  // Quality score
+  const qualityScore =
+    typeof selectedTemplate?.quality_score === 'string'
+      ? selectedTemplate.quality_score
+      : (selectedTemplate?.quality_score as any)?.score || undefined;
+
+  // Extract variables strictly from body text (no header handles or URLs)
+  const bodyVariables = extractTemplateBodyVariables(bodyText);
+
+  // Extract example body text from Meta template
+  const bodyExamples: Record<string, string> = {};
+  if (bodyComp?.example && Array.isArray((bodyComp.example as any).body_text)) {
+    const exArray = (bodyComp.example as any).body_text[0];
+    if (Array.isArray(exArray)) {
+      exArray.forEach((val: any, idx: number) => {
+        const varKey = String(idx + 1);
+        if (val) bodyExamples[varKey] = String(val);
+      });
+    }
+  }
+
   useEffect(() => {
     if (selectedTemplate) {
       if (selectedTemplate.language) {
         setLanguageCode(selectedTemplate.language);
       }
 
-      const initialMap: Record<string, { type: 'column' | 'static'; value: string }> = {};
+      // Reset image error state
+      setHeaderImgError(false);
 
-      if (selectedTemplate.variables && Array.isArray(selectedTemplate.variables)) {
-        selectedTemplate.variables.forEach((v) => {
-          // If CSV has a column matching name or v
-          if (importResult) {
-            const matchedHeader = importResult.headers.find(
-              (h) => h.toLowerCase().includes('name')
-            );
-            if (matchedHeader && (v === '1' || v.toLowerCase().includes('name'))) {
-              initialMap[v] = { type: 'column', value: matchedHeader };
-              return;
-            }
-          }
-          initialMap[v] = { type: 'static', value: '' };
-        });
+      // Reset custom uploaded mediaUrl if template does not have an image header
+      const tmplHeader = extractTemplateImageHeader(selectedTemplate);
+      if (!tmplHeader.hasImageHeader) {
+        setMediaUrl('');
       }
+
+      const initialMap: Record<string, { type: 'column' | 'static'; value: string }> = {};
+      const vars = extractTemplateBodyVariables(
+        selectedTemplate.components?.find((c) => c.type === 'BODY')?.text
+      );
+
+      vars.forEach((v) => {
+        // If CSV has a column matching name, invoice, amount or v
+        if (importResult) {
+          const matchedHeader = importResult.headers.find((h) => {
+            const hLower = h.toLowerCase().replace(/[\s\-_]+/g, '');
+            const vLower = v.toLowerCase().replace(/[\s\-_]+/g, '');
+            return (
+              hLower === vLower ||
+              (v === '1' && (hLower.includes('name') || hLower.includes('customer') || hLower.includes('client'))) ||
+              (v === '2' && (hLower.includes('invoice') || hLower.includes('order') || hLower.includes('bill'))) ||
+              (v === '3' && (hLower.includes('amount') || hLower.includes('price') || hLower.includes('total') || hLower.includes('balance')))
+            );
+          });
+
+          if (matchedHeader) {
+            initialMap[v] = { type: 'column', value: matchedHeader };
+            return;
+          }
+        }
+        initialMap[v] = { type: 'static', value: '' };
+      });
+
       setVariableMappings(initialMap);
     }
   }, [selectedTemplateName, selectedTemplate, importResult]);
@@ -248,19 +377,19 @@ export default function WhatsAppCampaignWizard({
     }
 
     if (!selectedTemplate) return 'No template selected';
-    const bodyComp = selectedTemplate.components?.find((c) => c.type === 'BODY');
-    if (!bodyComp || !bodyComp.text) return '(Empty template body)';
+    if (!bodyText) return '(Empty template body)';
 
-    let text = bodyComp.text;
+    let text = bodyText;
     const firstValid = importResult?.records.find((r) => r.status === 'valid') as
       | WhatsAppContactRecord
       | undefined;
 
-    Object.entries(variableMappings).forEach(([varKey, mapping]) => {
-      let sampleVal = `[${varKey}]`;
-      if (mapping.type === 'column' && firstValid && mapping.value) {
-        sampleVal = firstValid.raw[mapping.value] || `[${varKey}]`;
-      } else if (mapping.type === 'static' && mapping.value) {
+    bodyVariables.forEach((varKey) => {
+      const mapping = variableMappings[varKey];
+      let sampleVal = bodyExamples[varKey] || `[${varKey}]`;
+      if (mapping?.type === 'column' && firstValid && mapping.value) {
+        sampleVal = firstValid.raw[mapping.value] || sampleVal;
+      } else if (mapping?.type === 'static' && mapping.value) {
         sampleVal = mapping.value;
       }
       const regex = new RegExp(`\\{\\{${varKey}\\}\\}`, 'g');
@@ -307,9 +436,9 @@ export default function WhatsAppCampaignWizard({
         return;
       }
 
-      // Check required template variables
-      if (selectedTemplate.variables && selectedTemplate.variables.length > 0) {
-        const missing = selectedTemplate.variables.filter((v) => {
+      // Check required template variables from body text only
+      if (bodyVariables.length > 0) {
+        const missing = bodyVariables.filter((v) => {
           const m = variableMappings[v];
           if (!m) return true;
           if (m.type === 'column' && !m.value) return true;
@@ -324,6 +453,15 @@ export default function WhatsAppCampaignWizard({
           );
           return;
         }
+      }
+
+      // If template requires an image header, ensure an image URL is present
+      if (hasImageHeader && !activeHeaderImageUrl) {
+        toastError(
+          'This approved template requires a header image. Please upload a header photo before dispatching.',
+          'Header Image Required'
+        );
+        return;
       }
     } else {
       if (!customText.trim()) {
@@ -345,6 +483,8 @@ export default function WhatsAppCampaignWizard({
           selectedTemplate!.name
         );
 
+        const finalHeaderUrl = activeHeaderImageUrl || undefined;
+
         payload = {
           campaign_name: campaignName.trim(),
           mode: 'template',
@@ -355,6 +495,8 @@ export default function WhatsAppCampaignWizard({
           whatsapp_opt_in: true,
           variables: buildGlobalVariables(),
           recipients,
+          media_url: finalHeaderUrl,
+          header_image_url: finalHeaderUrl,
         };
       } else {
         payload = {
@@ -363,6 +505,7 @@ export default function WhatsAppCampaignWizard({
           message_type: messageType,
           content: customText,
           media_url: mediaUrl || undefined,
+          header_image_url: mediaUrl || undefined,
           media_caption: mediaCaption || undefined,
           whatsapp_opt_in: true,
           recipients,
@@ -594,10 +737,17 @@ export default function WhatsAppCampaignWizard({
                   </button>
                 </div>
 
-                {templates.length === 0 ? (
+                {isLoadingTemplates ? (
+                  <div className="p-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200 space-y-3">
+                    <RefreshCw className="w-5 h-5 text-emerald-600 animate-spin mx-auto" />
+                    <p className="text-xs font-semibold text-slate-700">
+                      Fetching approved WhatsApp templates from Meta...
+                    </p>
+                  </div>
+                ) : templates.length === 0 ? (
                   <div className="p-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200 space-y-3">
                     <p className="text-xs text-slate-500">
-                      No WhatsApp templates found in your local database.
+                      No approved WhatsApp templates found in your Meta account or local cache.
                     </p>
                     <button
                       type="button"
@@ -609,7 +759,7 @@ export default function WhatsAppCampaignWizard({
                     </button>
                   </div>
                 ) : (
-                  <div className="space-y-4">
+                  <div className="space-y-5">
                     {/* Template Selection & Language Code */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div>
@@ -623,11 +773,11 @@ export default function WhatsAppCampaignWizard({
                             const found = templates.find((t) => t.name === e.target.value);
                             if (found?.language) setLanguageCode(found.language);
                           }}
-                          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-medium bg-white text-slate-900 focus:outline-none focus:border-emerald-500"
+                          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-semibold bg-white text-slate-900 focus:outline-none focus:border-emerald-500"
                         >
                           {templates.map((tmpl) => (
-                            <option key={tmpl.name} value={tmpl.name}>
-                              {tmpl.name} ({tmpl.language} • {tmpl.status})
+                            <option key={`${tmpl.name}_${tmpl.language}`} value={tmpl.name}>
+                              {tmpl.name} ({tmpl.category || 'TEMPLATE'} • {tmpl.language})
                             </option>
                           ))}
                         </select>
@@ -650,101 +800,255 @@ export default function WhatsAppCampaignWizard({
                       </div>
                     </div>
 
-                    {/* Header Image Upload if Template has an Image Header */}
-                    {selectedTemplate?.components?.find(
-                      (c) => c.type === 'HEADER' && c.format === 'IMAGE'
-                    ) && (
-                      <div className="p-4 rounded-2xl bg-emerald-50/50 border border-emerald-200/70 space-y-2">
+                    {/* Selected Template Details Card */}
+                    {selectedTemplate && (
+                      <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/90 space-y-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-3">
+                          <div>
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                              Selected Meta Template
+                            </span>
+                            <h5 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                              <span>{selectedTemplate.name}</span>
+                            </h5>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                            <span className="px-2 py-0.5 rounded-md font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                              {selectedTemplate.status || 'APPROVED'}
+                            </span>
+                            {selectedTemplate.category && (
+                              <span className="px-2 py-0.5 rounded-md font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                {selectedTemplate.category}
+                              </span>
+                            )}
+                            <span className="px-2 py-0.5 rounded-md font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                              {selectedTemplate.language}
+                            </span>
+                            {qualityScore && (
+                              <span className="px-2 py-0.5 rounded-md font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                Quality: {qualityScore}
+                              </span>
+                            )}
+                            <span className="px-2 py-0.5 rounded-md font-semibold bg-amber-50 text-amber-800 border border-amber-200">
+                              {hasImageHeader ? 'IMAGE Header' : (headerFormat ? `${headerFormat} Header` : 'No Header')}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Body Preview with Highlighted Placeholders */}
+                        <div className="space-y-1.5">
+                          <span className="text-[11px] font-semibold text-slate-600 block">
+                            Template Message Body:
+                          </span>
+                          <div className="p-3 bg-white rounded-xl border border-slate-200 text-xs text-slate-800 leading-relaxed font-normal">
+                            {renderHighlightedTemplateBody(bodyText)}
+                          </div>
+                        </div>
+
+                        {/* Footer text if available */}
+                        {footerText && (
+                          <div className="text-[11px] text-slate-500 italic flex items-center gap-1.5 px-1">
+                            <span className="font-semibold not-italic text-slate-600">Footer:</span>
+                            <span>{footerText}</span>
+                          </div>
+                        )}
+
+                        {/* Buttons if available */}
+                        {buttons.length > 0 && (
+                          <div className="pt-1 flex flex-wrap items-center gap-2">
+                            <span className="text-[11px] font-semibold text-slate-600">Action Buttons:</span>
+                            {buttons.map((btn: any, idx: number) => (
+                              <span
+                                key={idx}
+                                className="px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-[11px] font-semibold text-slate-700 shadow-2xs"
+                              >
+                                {btn.text || btn.url || `Button ${idx + 1}`}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Header Image Section (Only if template has IMAGE Header) */}
+                    {hasImageHeader && (
+                      <div className="p-4 rounded-2xl bg-emerald-50/60 border border-emerald-200/90 space-y-4">
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <h5 className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
+                              <ImageIcon className="w-4 h-4 text-emerald-600" />
+                              <span>Template Header Image</span>
+                              <span className="px-1.5 py-0.5 rounded text-[10px] bg-emerald-200 text-emerald-900 font-bold">
+                                Required by Template
+                              </span>
+                            </h5>
+                            <p className="text-[11px] text-emerald-800 mt-0.5">
+                              This approved WhatsApp template requires a promotional header photo. You can use the default photo or upload a new one.
+                            </p>
+                          </div>
+                          {mediaUrl && (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-600 text-white shrink-0">
+                              Custom Image Active
+                            </span>
+                          )}
+                        </div>
+
+                        {/* If using default template image and not yet overridden */}
+                        {!mediaUrl && exampleImageUrl && (
+                          <div className="p-3 bg-white/90 rounded-xl border border-emerald-200 flex items-center gap-3">
+                            <div className="relative w-16 h-16 rounded-lg overflow-hidden border border-slate-200 bg-slate-100 shrink-0">
+                              {!headerImgError ? (
+                                <img
+                                  src={exampleImageUrl}
+                                  alt="Template Header Preview"
+                                  className="w-full h-full object-cover"
+                                  onError={() => setHeaderImgError(true)}
+                                />
+                              ) : (
+                                <div className="w-full h-full flex flex-col items-center justify-center p-1 text-center bg-slate-100 text-slate-400">
+                                  <ImageIcon className="w-4 h-4" />
+                                </div>
+                              )}
+                            </div>
+                            <div className="text-xs min-w-0">
+                              <div className="font-semibold text-slate-900 flex items-center gap-1.5">
+                                {!headerImgError ? (
+                                  <>
+                                    <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span>
+                                    <span>Template Default Image Active</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <span className="w-2 h-2 rounded-full bg-amber-500 inline-block"></span>
+                                    <span className="text-amber-800">Meta Temporary Handle Expired</span>
+                                  </>
+                                )}
+                              </div>
+                              <p className="text-[11px] text-slate-600 mt-0.5">
+                                {!headerImgError
+                                  ? 'Default image registered with Meta template will be used, or upload your own below.'
+                                  : 'The temporary Meta CDN handle for this template has expired. Please upload a header image below to dispatch this campaign.'}
+                              </p>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Image Upload Area */}
                         <ImageUploadArea
-                          label="Template Header Promotional Photo"
+                          label="Upload / Replace Header Image"
                           value={mediaUrl}
-                          description="Upload photo for this approved WhatsApp template (JPG, PNG, WEBP)"
-                          onChange={(url) => setMediaUrl(url)}
-                          onRemove={() => setMediaUrl('')}
-                          previewHeight="h-36"
+                          description="Browse files or drag & drop (JPG, PNG, WEBP, max 5MB). Replaces default template image."
+                          onChange={(url) => {
+                            setMediaUrl(url);
+                            setHeaderImgError(false);
+                          }}
+                          onRemove={() => {
+                            setMediaUrl('');
+                            setHeaderImgError(false);
+                          }}
+                          previewHeight="h-40"
                         />
                       </div>
                     )}
 
-                    {/* Dynamic Variable Mapping */}
-                    {Object.keys(variableMappings).length > 0 && (
-                      <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-3">
-                        <div>
-                          <h5 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                            <Tag className="w-3.5 h-3.5 text-emerald-600" />
-                            Template Variable Mapping
-                          </h5>
-                          <p className="text-[11px] text-slate-500">
-                            Map each WhatsApp merge tag to a column from your CSV or enter a fixed value.
-                          </p>
-                        </div>
-
-                        <div className="space-y-2.5 pt-2">
-                          {Object.entries(variableMappings).map(([varKey, mapping]) => (
-                            <div
-                              key={varKey}
-                              className="p-3 rounded-xl bg-white border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
-                            >
-                              <span className="font-mono font-bold text-emerald-700">
-                                {`{{${varKey}}}`}
-                              </span>
-
-                              <div className="flex items-center gap-2 flex-1 max-w-xs justify-end">
-                                <select
-                                  value={mapping.type}
-                                  onChange={(e) =>
-                                    setVariableMappings({
-                                      ...variableMappings,
-                                      [varKey]: {
-                                        type: e.target.value as 'column' | 'static',
-                                        value: '',
-                                      },
-                                    })
-                                  }
-                                  className="px-2 py-1 rounded-lg border border-slate-200 text-[11px] font-semibold text-slate-600 bg-slate-50"
-                                >
-                                  <option value="column">CSV Column</option>
-                                  <option value="static">Fixed Text</option>
-                                </select>
-
-                                {mapping.type === 'column' ? (
-                                  <select
-                                    value={mapping.value}
-                                    onChange={(e) =>
-                                      setVariableMappings({
-                                        ...variableMappings,
-                                        [varKey]: { ...mapping, value: e.target.value },
-                                      })
-                                    }
-                                    className="flex-1 px-2.5 py-1 rounded-lg border border-slate-200 text-xs bg-white text-slate-800"
-                                  >
-                                    <option value="">-- Choose Column --</option>
-                                    {importResult?.headers.map((h) => (
-                                      <option key={h} value={h}>
-                                        {h}
-                                      </option>
-                                    ))}
-                                  </select>
-                                ) : (
-                                  <input
-                                    type="text"
-                                    value={mapping.value}
-                                    onChange={(e) =>
-                                      setVariableMappings({
-                                        ...variableMappings,
-                                        [varKey]: { ...mapping, value: e.target.value },
-                                      })
-                                    }
-                                    placeholder="Enter value"
-                                    className="flex-1 px-2.5 py-1 rounded-lg border border-slate-200 text-xs bg-white text-slate-800"
-                                  />
-                                )}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
+                    {/* Dynamic Template Variable Mapping */}
+                    <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/90 space-y-3">
+                      <div>
+                        <h5 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                          <Tag className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Template Variable Mapping</span>
+                        </h5>
+                        <p className="text-[11px] text-slate-500">
+                          {bodyVariables.length > 0
+                            ? 'Map numbered message body placeholders to recipient CSV columns or static text.'
+                            : 'This approved template has no dynamic message body variables.'}
+                        </p>
                       </div>
-                    )}
+
+                      {bodyVariables.length === 0 ? (
+                        <div className="p-3 bg-white rounded-xl border border-slate-200 text-xs text-slate-600 flex items-center gap-2">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <span>No merge variables required. The exact approved template message will be delivered to each recipient.</span>
+                        </div>
+                      ) : (
+                        <div className="space-y-2.5 pt-1">
+                          {bodyVariables.map((varKey) => {
+                            const mapping = variableMappings[varKey] || { type: 'column', value: '' };
+                            const sampleHint = bodyExamples[varKey];
+
+                            return (
+                              <div
+                                key={varKey}
+                                className="p-3 rounded-xl bg-white border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
+                              >
+                                <div className="flex items-center gap-2">
+                                  <span className="font-mono font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                                    {`{{${varKey}}}`}
+                                  </span>
+                                  {sampleHint && (
+                                    <span className="text-[11px] text-slate-400 italic">
+                                      (e.g. &quot;{sampleHint}&quot;)
+                                    </span>
+                                  )}
+                                </div>
+
+                                <div className="flex items-center gap-2 flex-1 max-w-xs justify-end">
+                                  <select
+                                    value={mapping.type}
+                                    onChange={(e) =>
+                                      setVariableMappings({
+                                        ...variableMappings,
+                                        [varKey]: {
+                                          type: e.target.value as 'column' | 'static',
+                                          value: '',
+                                        },
+                                      })
+                                    }
+                                    className="px-2 py-1.5 rounded-lg border border-slate-200 text-[11px] font-semibold text-slate-700 bg-slate-50"
+                                  >
+                                    <option value="column">CSV Column</option>
+                                    <option value="static">Fixed Text</option>
+                                  </select>
+
+                                  {mapping.type === 'column' ? (
+                                    <select
+                                      value={mapping.value}
+                                      onChange={(e) =>
+                                        setVariableMappings({
+                                          ...variableMappings,
+                                          [varKey]: { ...mapping, value: e.target.value },
+                                        })
+                                      }
+                                      className="flex-1 px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs bg-white text-slate-800 focus:outline-none focus:border-emerald-500"
+                                    >
+                                      <option value="">-- Choose Column --</option>
+                                      {importResult?.headers.map((h) => (
+                                        <option key={h} value={h}>
+                                          {h}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  ) : (
+                                    <input
+                                      type="text"
+                                      value={mapping.value}
+                                      onChange={(e) =>
+                                        setVariableMappings({
+                                          ...variableMappings,
+                                          [varKey]: { ...mapping, value: e.target.value },
+                                        })
+                                      }
+                                      placeholder={`Enter value for {{${varKey}}}`}
+                                      className="flex-1 px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs bg-white text-slate-800 focus:outline-none focus:border-emerald-500"
+                                    />
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
@@ -763,16 +1067,12 @@ export default function WhatsAppCampaignWizard({
 
                 <div className="py-4">
                   <WhatsAppBubblePreview
-                    headerMediaType={
-                      selectedTemplate?.components?.find((c) => c.type === 'HEADER')?.format ===
-                      'IMAGE'
-                        ? 'IMAGE'
-                        : undefined
-                    }
-                    headerMediaUrl={mediaUrl}
+                    headerMediaType={hasImageHeader ? 'IMAGE' : undefined}
+                    headerMediaUrl={hasImageHeader ? (activeHeaderImageUrl || undefined) : undefined}
+                    headerText={!hasImageHeader && headerInfo.headerText ? headerInfo.headerText : undefined}
                     bodyText={getSampleBodyPreview()}
-                    footerText={selectedTemplate?.components?.find((c) => c.type === 'FOOTER')?.text}
-                    buttons={selectedTemplate?.components?.find((c) => c.type === 'BUTTONS')?.buttons}
+                    footerText={footerText || undefined}
+                    buttons={buttons}
                   />
                 </div>
 
@@ -1161,8 +1461,24 @@ export default function WhatsAppCampaignWizard({
               <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 flex flex-col items-center">
                 <span className="text-xs font-semibold text-slate-400 mb-2">Message Preview:</span>
                 <WhatsAppBubblePreview
+                  headerMediaType={
+                    mode === 'template'
+                      ? (hasImageHeader ? 'IMAGE' : undefined)
+                      : (messageType === 'image' ? 'IMAGE' : (messageType === 'document' ? 'DOCUMENT' : undefined))
+                  }
+                  headerMediaUrl={
+                    mode === 'template'
+                      ? (hasImageHeader ? (activeHeaderImageUrl || undefined) : undefined)
+                      : (mediaUrl || undefined)
+                  }
+                  headerText={
+                    mode === 'template' && !hasImageHeader && headerInfo.headerText
+                      ? headerInfo.headerText
+                      : undefined
+                  }
                   bodyText={getSampleBodyPreview()}
-                  buttons={selectedTemplate?.components?.find((c) => c.type === 'BUTTONS')?.buttons}
+                  footerText={mode === 'template' ? (footerText || undefined) : undefined}
+                  buttons={mode === 'template' ? buttons : undefined}
                 />
               </div>
 
@@ -1190,6 +1506,14 @@ export default function WhatsAppCampaignWizard({
                         template_name: selectedTemplate?.name,
                         language_code: languageCode.trim() || 'en',
                         whatsapp_opt_in: whatsappOptIn,
+                        media_url:
+                          mode === 'template'
+                            ? (activeHeaderImageUrl || undefined)
+                            : (mediaUrl || undefined),
+                        header_image_url:
+                          mode === 'template'
+                            ? (activeHeaderImageUrl || undefined)
+                            : (mediaUrl || undefined),
                         variables: buildGlobalVariables(),
                         recipients: buildRecipientsPayload().slice(0, 3),
                         total_recipients: buildRecipientsPayload().length,

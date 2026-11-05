@@ -128,6 +128,147 @@ export async function verifyWhatsAppPhone(): Promise<{ success: boolean; data?: 
 }
 
 // 2. WhatsApp Templates APIs
+
+/**
+ * Fetch live Meta WhatsApp templates directly from Meta Cloud API
+ * GET /whatsapp/templates/meta (fallback: /api/whatsapp/templates/meta)
+ */
+export async function listMetaWhatsAppTemplates(): Promise<ListWhatsAppTemplatesResponse> {
+  try {
+    let res;
+    try {
+      res = await apiClient.get<any>('/whatsapp/templates/meta');
+    } catch (err: any) {
+      if (err?.response?.status === 404) {
+        // Fallback in case route mounted with /api prefix
+        res = await apiClient.get<any>('/api/whatsapp/templates/meta');
+      } else {
+        throw err;
+      }
+    }
+
+    const raw = res.data;
+    let templates: WhatsAppTemplate[] = [];
+
+    if (Array.isArray(raw)) {
+      templates = raw;
+    } else if (raw && Array.isArray(raw.data)) {
+      templates = raw.data;
+    } else if (raw && Array.isArray(raw.templates)) {
+      templates = raw.templates;
+    } else if (raw && raw.data && Array.isArray(raw.data.data)) {
+      templates = raw.data.data;
+    } else if (raw && raw.success && Array.isArray(raw.data)) {
+      templates = raw.data;
+    } else if (raw && raw.success === false) {
+      return {
+        success: false,
+        error: raw.error || raw.message || 'Failed to fetch Meta WhatsApp templates.',
+        data: [],
+      };
+    }
+
+    return {
+      success: true,
+      data: templates,
+    };
+  } catch (err) {
+    return {
+      success: false,
+      error: extractErrorMessage(err, 'Failed to fetch Meta WhatsApp templates.'),
+      data: [],
+    };
+  }
+}
+
+/**
+ * Extract template image header details from components
+ */
+export function extractTemplateImageHeader(template?: WhatsAppTemplate | null): {
+  hasImageHeader: boolean;
+  headerFormat: 'IMAGE' | 'TEXT' | 'DOCUMENT' | 'VIDEO' | 'NONE';
+  exampleImageUrl?: string;
+  headerText?: string;
+} {
+  if (!template || !Array.isArray(template.components)) {
+    return { hasImageHeader: false, headerFormat: 'NONE' };
+  }
+
+  const headerComp = template.components.find((c) => c.type === 'HEADER');
+  if (!headerComp) {
+    return { hasImageHeader: false, headerFormat: 'NONE' };
+  }
+
+  const format = (headerComp.format || (headerComp.text ? 'TEXT' : 'NONE')).toUpperCase() as
+    | 'IMAGE'
+    | 'TEXT'
+    | 'DOCUMENT'
+    | 'VIDEO'
+    | 'NONE';
+
+  const isImage = format === 'IMAGE';
+  let exampleUrl: string | undefined = undefined;
+
+  if (headerComp.example) {
+    const ex = headerComp.example as any;
+    if (Array.isArray(ex.header_handle) && ex.header_handle.length > 0) {
+      exampleUrl = String(ex.header_handle[0]);
+    } else if (typeof ex.header_handle === 'string' && ex.header_handle.trim()) {
+      exampleUrl = ex.header_handle.trim();
+    } else if (Array.isArray(ex.header_url) && ex.header_url.length > 0) {
+      exampleUrl = String(ex.header_url[0]);
+    } else if (typeof ex.header_url === 'string' && ex.header_url.trim()) {
+      exampleUrl = ex.header_url.trim();
+    }
+  }
+
+  if (!exampleUrl && isImage && headerComp.text && /^https?:\/\//i.test(headerComp.text.trim())) {
+    exampleUrl = headerComp.text.trim();
+  }
+
+  return {
+    hasImageHeader: isImage,
+    headerFormat: format,
+    exampleImageUrl: exampleUrl,
+    headerText: headerComp.text,
+  };
+}
+
+/**
+ * Parse only numbered and named placeholders from BODY text (e.g. {{1}}, {{2}})
+ * Excludes raw URLs, protocol links, and header handles.
+ */
+export function extractTemplateBodyVariables(bodyText?: string): string[] {
+  if (!bodyText) return [];
+  const matches = bodyText.match(/\{\{([0-9a-zA-Z_]+)\}\}/g) || [];
+  const vars: string[] = [];
+
+  matches.forEach((m) => {
+    const rawKey = m.replace(/[{}]/g, '').trim();
+    if (
+      rawKey &&
+      !vars.includes(rawKey) &&
+      !rawKey.startsWith('http') &&
+      !rawKey.includes('://') &&
+      !rawKey.toLowerCase().includes('header_handle')
+    ) {
+      vars.push(rawKey);
+    }
+  });
+
+  // Sort numeric placeholders ascending (1, 2, 3...)
+  vars.sort((a, b) => {
+    const numA = parseInt(a, 10);
+    const numB = parseInt(b, 10);
+    if (!isNaN(numA) && !isNaN(numB)) {
+      return numA - numB;
+    }
+    return a.localeCompare(b);
+  });
+
+  return vars;
+}
+
 export async function listWhatsAppTemplates(): Promise<ListWhatsAppTemplatesResponse> {
   try {
     let res;
@@ -372,4 +513,35 @@ export async function getWhatsAppQueueStatus(): Promise<WhatsAppQueueStatusRespo
     };
   }
 }
+
+/**
+ * Delete WhatsApp Campaign
+ * DELETE /api/whatsapp/campaigns/:id (fallback: /whatsapp/campaigns/:id)
+ */
+export async function deleteWhatsAppCampaign(
+  id: string | number
+): Promise<{ success: boolean; message?: string; error?: string }> {
+  try {
+    let res;
+    try {
+      res = await apiClient.delete<any>(`/api/whatsapp/campaigns/${id}`);
+    } catch (err: any) {
+      if (err?.response?.status === 404) {
+        res = await apiClient.delete<any>(`/whatsapp/campaigns/${id}`);
+      } else {
+        throw err;
+      }
+    }
+    return {
+      success: res.data?.success ?? true,
+      message: res.data?.message || 'WhatsApp campaign deleted successfully.',
+    };
+  } catch (err) {
+    return {
+      success: false,
+      error: extractErrorMessage(err, 'Failed to delete WhatsApp campaign.'),
+    };
+  }
+}
+
 

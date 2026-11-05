@@ -669,3 +669,34 @@ export async function deleteEmailTemplate(
   }
 }
 
+/**
+ * 13. Delete Email Campaign
+ * DELETE /api/email/campaigns/:id (fallback: /email/campaigns/:id)
+ */
+export async function deleteEmailCampaign(
+  id: string | number
+): Promise<{ success: boolean; message?: string; error?: string }> {
+  try {
+    let res;
+    try {
+      res = await apiClient.delete<any>(`/api/email/campaigns/${id}`);
+    } catch (err: any) {
+      if (err?.response?.status === 404) {
+        res = await apiClient.delete<any>(`/email/campaigns/${id}`);
+      } else {
+        throw err;
+      }
+    }
+    return {
+      success: res.data?.success ?? true,
+      message: res.data?.message || 'Email campaign deleted successfully.',
+    };
+  } catch (err) {
+    return {
+      success: false,
+      error: extractErrorMessage(err, 'Failed to delete email campaign.'),
+    };
+  }
+}
+
+

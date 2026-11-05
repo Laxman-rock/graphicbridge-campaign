@@ -37,6 +37,12 @@ export default function WhatsAppBubblePreview({
   buttons = [],
   timestamp = '12:45 PM',
 }: WhatsAppBubblePreviewProps) {
+  const [imgError, setImgError] = React.useState(false);
+
+  React.useEffect(() => {
+    setImgError(false);
+  }, [headerMediaUrl]);
+
   // Format basic whatsapp bold/italics
   const formatWhatsAppText = (text: string) => {
     return text
@@ -68,20 +74,20 @@ export default function WhatsAppBubblePreview({
         {/* Header Component */}
         {headerMediaType === 'IMAGE' && (
           <div className="rounded-xl overflow-hidden bg-slate-100 h-36 flex items-center justify-center border border-slate-200">
-            {headerMediaUrl ? (
+            {headerMediaUrl && !imgError ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={headerMediaUrl}
                 alt="Header Media"
                 className="w-full h-full object-cover"
-                onError={(e) => {
-                  (e.target as HTMLElement).style.display = 'none';
-                }}
+                onError={() => setImgError(true)}
               />
             ) : (
-              <div className="flex flex-col items-center text-slate-400 text-xs">
-                <ImageIcon className="w-6 h-6 mb-1 text-slate-300" />
-                <span>Header Image</span>
+              <div className="flex flex-col items-center text-slate-400 text-xs px-2 text-center">
+                <ImageIcon className="w-6 h-6 mb-1 text-slate-400" />
+                <span className="text-[11px] font-medium text-slate-500">
+                  {imgError ? 'Header Photo (Preview expired)' : 'Header Photo'}
+                </span>
               </div>
             )}
           </div>

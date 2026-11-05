@@ -67,10 +67,12 @@ export interface WhatsAppTemplateComponent {
   text?: string;
   example?: {
     header_text?: string[];
+    header_handle?: string[];
+    header_url?: string[];
     body_text?: string[][];
   };
   buttons?: Array<{
-    type: 'QUICK_REPLY' | 'URL' | 'PHONE_NUMBER' | 'COPY_CODE' | 'OTP';
+    type: 'QUICK_REPLY' | 'URL' | 'PHONE_NUMBER' | 'COPY_CODE' | 'OTP' | string;
     text: string;
     url?: string;
     phone_number?: string;
@@ -89,7 +91,7 @@ export interface WhatsAppTemplate {
   components: WhatsAppTemplateComponent[];
   variables?: string[];
   is_active: boolean;
-  quality_score?: string;
+  quality_score?: string | { score?: string };
   last_synced_at?: string;
 }
 
@@ -120,6 +122,7 @@ export interface CreateWhatsAppCampaignRequest {
   recipients: WhatsAppRecipientInput[];
   content?: string;
   media_url?: string;
+  header_image_url?: string;
   media_filename?: string;
   media_caption?: string;
 }

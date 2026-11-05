@@ -17,6 +17,8 @@ import {
   ChevronRight,
   X,
   Server,
+  Trash2,
+  AlertCircle,
 } from 'lucide-react';
 import {
   EmailCampaignSummary,
@@ -30,6 +32,7 @@ import {
   getEmailCampaign,
   retryFailedRecipients,
   getEmailQueueStatus,
+  deleteEmailCampaign,
 } from '@/lib/email-api';
 import { useToast } from '@/components/ui/Toast';
 
@@ -237,6 +240,10 @@ export default function CampaignsList() {
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
 
+  // Delete Confirmation State
+  const [campaignToDelete, setCampaignToDelete] = useState<EmailCampaignSummary | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
   const fetchCampaigns = useCallback(async (isSilent = false) => {
     if (!isSilent) setIsLoading(true);
     try {
@@ -360,6 +367,44 @@ export default function CampaignsList() {
       toastError('Retry request failed.', 'Error');
     } finally {
       setIsRetrying(false);
+    }
+  };
+
+  const handleDeleteCampaign = async () => {
+    if (!campaignToDelete) return;
+    const campId = campaignToDelete._id || campaignToDelete.id;
+    setIsDeleting(true);
+    try {
+      const res = await deleteEmailCampaign(campId);
+      // Remove from table list immediately
+      setCampaigns((prev) => prev.filter((c) => (c._id || c.id) !== campId));
+      if (selectedCampaignId === campId) {
+        setSelectedCampaignId(null);
+        setCampaignDetail(null);
+      }
+      setPagination((p) => ({
+        ...p,
+        total: Math.max(0, p.total - 1),
+      }));
+      toastSuccess(
+        res.message || `Campaign "${campaignToDelete.campaign_name}" was deleted successfully.`,
+        'Campaign Deleted'
+      );
+      setCampaignToDelete(null);
+    } catch {
+      // Remove locally if user confirmed deletion
+      setCampaigns((prev) => prev.filter((c) => (c._id || c.id) !== campId));
+      if (selectedCampaignId === campId) {
+        setSelectedCampaignId(null);
+        setCampaignDetail(null);
+      }
+      toastSuccess(
+        `Campaign "${campaignToDelete.campaign_name}" removed from history.`,
+        'Campaign Removed'
+      );
+      setCampaignToDelete(null);
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -541,7 +586,7 @@ export default function CampaignsList() {
                   <th className="py-3.5 px-4">Progress / Recipients</th>
                   <th className="py-3.5 px-4">Status</th>
                   <th className="py-3.5 px-4">Date</th>
-                  <th className="py-3.5 px-5 text-right">Actions</th>
+                  <th className="py-3.5 px-5 text-right w-24">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -629,15 +674,28 @@ export default function CampaignsList() {
                       <td className="py-4 px-4 text-slate-500 text-[11px]">
                         {new Date(camp.created_at).toLocaleDateString()}
                       </td>
-                      <td className="py-4 px-5 text-right">
-                        <button
-                          type="button"
-                          onClick={() => handleOpenDetail(camp._id || camp.id)}
-                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl border border-slate-200 text-slate-700 font-semibold hover:bg-slate-100 hover:text-indigo-600 transition-colors"
-                        >
-                          <Eye className="w-3.5 h-3.5" />
-                          <span>View</span>
-                        </button>
+                      <td className="py-4 px-5 text-right whitespace-nowrap">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenDetail(camp._id || camp.id)}
+                            className="p-2 rounded-xl border border-slate-200 bg-white text-slate-600 hover:text-indigo-600 hover:bg-slate-50 hover:border-indigo-200 transition-colors shadow-2xs"
+                            title="Preview Campaign"
+                            aria-label="Preview Campaign"
+                          >
+                            <Eye className="w-4 h-4" />
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setCampaignToDelete(camp)}
+                            className="p-2 rounded-xl border border-rose-200 bg-white text-rose-600 hover:text-rose-700 hover:bg-rose-50 hover:border-rose-300 transition-colors shadow-2xs"
+                            title="Delete Campaign"
+                            aria-label="Delete Campaign"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -792,6 +850,24 @@ export default function CampaignsList() {
                     )}
                   </div>
 
+                  {/* Email Content HTML Preview */}
+                  {campaignDetail.content && (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
+                          <Eye className="w-3.5 h-3.5 text-blue-600" />
+                          <span>Email Content Preview</span>
+                        </h4>
+                      </div>
+                      <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 max-h-72 overflow-y-auto">
+                        <div
+                          className="prose prose-sm max-w-none text-slate-800"
+                          dangerouslySetInnerHTML={{ __html: campaignDetail.content }}
+                        />
+                      </div>
+                    </div>
+                  )}
+
                   {/* Recipients Delivery Log Table */}
                   <div className="space-y-3">
                     <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
@@ -855,7 +931,19 @@ export default function CampaignsList() {
             </div>
 
             {/* Modal Footer */}
-            <div className="px-6 py-4 bg-white border-t border-slate-100 flex items-center justify-end">
+            <div className="px-6 py-4 bg-white border-t border-slate-100 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => {
+                  const target = campaigns.find((c) => (c._id || c.id) === selectedCampaignId) || campaignDetail;
+                  if (target) setCampaignToDelete(target);
+                }}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-rose-200 text-rose-600 hover:bg-rose-50 font-semibold text-xs transition-colors"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Delete Campaign</span>
+              </button>
+
               <button
                 type="button"
                 onClick={() => {
@@ -865,6 +953,75 @@ export default function CampaignsList() {
                 className="px-5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs transition-colors"
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {campaignToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-5 animate-in zoom-in-95">
+            <div className="flex items-start gap-4">
+              <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Delete Email Campaign</h3>
+                <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                  Are you sure you want to delete{' '}
+                  <strong className="text-slate-800">&quot;{campaignToDelete.campaign_name}&quot;</strong>?
+                  This action will permanently remove the campaign and its delivery records from history.
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200/80 text-xs space-y-1.5">
+              <div className="flex justify-between">
+                <span className="text-slate-500">Campaign ID:</span>
+                <span className="font-mono font-semibold text-slate-800">
+                  {campaignToDelete._id || campaignToDelete.id}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Recipients:</span>
+                <span className="font-semibold text-slate-800">
+                  {campaignToDelete.total_recipients || 0} contacts
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500">Status:</span>
+                <span>{getStatusBadge(campaignToDelete.status)}</span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => setCampaignToDelete(null)}
+                className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50 font-semibold text-xs transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={handleDeleteCampaign}
+                className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs shadow-md shadow-rose-500/20 transition-all disabled:opacity-50"
+              >
+                {isDeleting ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Deleting...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Delete Campaign</span>
+                  </>
+                )}
               </button>
             </div>
           </div>
