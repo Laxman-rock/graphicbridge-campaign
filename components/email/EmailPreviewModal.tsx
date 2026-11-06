@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { X, Eye, FileText, Code, CheckCircle, AlertCircle, RefreshCw } from 'lucide-react';
+import { X, Eye, FileText, Code, CheckCircle, AlertCircle, RefreshCw, Maximize2, Minimize2 } from 'lucide-react';
 import { EmailPreviewResponse } from '@/types/email';
 
 interface EmailPreviewModalProps {
@@ -22,12 +22,13 @@ export default function EmailPreviewModal({
   onRefresh,
 }: EmailPreviewModalProps) {
   const [activeTab, setActiveTab] = useState<'html' | 'text'>('html');
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in">
-      <div className="bg-white rounded-3xl max-w-4xl w-full h-[85vh] shadow-2xl border border-slate-200 flex flex-col overflow-hidden">
+    <div className={`fixed inset-0 z-50 flex items-center justify-center ${isFullscreen ? 'p-0' : 'p-4'} bg-slate-900/50 backdrop-blur-sm animate-in fade-in`}>
+      <div className={`bg-white ${isFullscreen ? 'rounded-none w-screen h-screen max-w-none' : 'rounded-3xl max-w-5xl w-full h-[88vh]'} shadow-2xl border border-slate-200 flex flex-col overflow-hidden transition-all`}>
         {/* Header */}
         <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/60">
           <div className="flex items-center gap-3">
@@ -54,6 +55,18 @@ export default function EmailPreviewModal({
                 <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
               </button>
             )}
+            <button
+              type="button"
+              onClick={() => setIsFullscreen(!isFullscreen)}
+              className="p-2 rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-200/60 transition-colors"
+              title={isFullscreen ? 'Exit Full Screen' : 'Full Screen'}
+            >
+              {isFullscreen ? (
+                <Minimize2 className="w-4 h-4 text-blue-600" />
+              ) : (
+                <Maximize2 className="w-4 h-4" />
+              )}
+            </button>
             <button
               type="button"
               onClick={onClose}

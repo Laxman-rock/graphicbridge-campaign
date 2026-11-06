@@ -1,8 +1,9 @@
 'use client';
 
-import React from 'react';
-import { Mail, Phone, MessageSquare, User, HelpCircle, Check, AlertCircle } from 'lucide-react';
+import React, { useState } from 'react';
+import { Mail, Phone, MessageSquare, User, HelpCircle, Check, AlertCircle, FileSpreadsheet, Eye } from 'lucide-react';
 import { CampaignType } from '@/types/campaign';
+import CsvFilePreviewModal from '@/components/campaign/CsvFilePreviewModal';
 
 interface ColumnSelectorProps {
   headers: string[];
@@ -14,6 +15,9 @@ interface ColumnSelectorProps {
   onEmailColChange?: (col: string | null) => void;
   onTargetColChange?: (col: string | null) => void;
   onNameColChange: (col: string | null) => void;
+  fileName?: string;
+  totalRows?: number;
+  detectedCol?: string | null;
 }
 
 export default function ColumnSelector({
@@ -26,9 +30,13 @@ export default function ColumnSelector({
   onEmailColChange,
   onTargetColChange,
   onNameColChange,
+  fileName,
+  totalRows,
+  detectedCol,
 }: ColumnSelectorProps) {
   const isEmail = campaignType === 'email';
   const targetCol = selectedTargetCol !== undefined ? selectedTargetCol : selectedEmailCol || null;
+  const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
 
   const handleColChange = (val: string | null) => {
     if (onTargetColChange) onTargetColChange(val);
@@ -65,17 +73,35 @@ export default function ColumnSelector({
               : 'Confirm which column in your CSV contains recipient mobile / phone numbers.'}
           </p>
         </div>
-        {!targetCol ? (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
-            <AlertCircle className="w-3.5 h-3.5" />
-            Column Selection Required
-          </span>
-        ) : (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-            <Check className="w-3.5 h-3.5" />
-            {isEmail ? 'Email' : 'Mobile Number'} Mapped
-          </span>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {rawRows.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setIsPreviewModalOpen(true)}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold shadow-2xs transition-all ${
+                isEmail
+                  ? 'border-blue-200 bg-blue-50/80 text-blue-700 hover:bg-blue-100 hover:border-blue-300'
+                  : 'border-emerald-200 bg-emerald-50/80 text-emerald-700 hover:bg-emerald-100 hover:border-emerald-300'
+              }`}
+              title="Preview uploaded CSV file data and headers"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              <span>Preview Uploaded File</span>
+            </button>
+          )}
+
+          {!targetCol ? (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+              <AlertCircle className="w-3.5 h-3.5" />
+              Column Selection Required
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+              <Check className="w-3.5 h-3.5" />
+              {isEmail ? 'Email' : 'Mobile Number'} Mapped
+            </span>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -176,6 +202,20 @@ export default function ColumnSelector({
           </p>
         </div>
       </div>
+
+      {/* Uploaded CSV Preview Modal */}
+      <CsvFilePreviewModal
+        isOpen={isPreviewModalOpen}
+        onClose={() => setIsPreviewModalOpen(false)}
+        fileName={fileName}
+        totalRows={totalRows || rawRows.length}
+        headers={headers}
+        rawRows={rawRows}
+        campaignType={campaignType}
+        selectedTargetCol={targetCol}
+        detectedCol={detectedCol}
+        onSelectTargetCol={handleColChange}
+      />
     </div>
   );
 }

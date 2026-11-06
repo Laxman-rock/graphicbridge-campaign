@@ -34,6 +34,10 @@ import {
   BadgeAlert,
   CreditCard,
   Check,
+  ChevronLeft,
+  X,
+  Maximize2,
+  Minimize2,
 } from 'lucide-react';
 import {
   EmailTemplate,
@@ -82,8 +86,22 @@ export default function ModernTemplateEditor({
   );
   const [category, setCategory] = useState(initialTemplate?.category || 'marketing');
 
-  // Preview Mode: Desktop (~600px) vs Mobile (~375px)
+  // Preview Mode: Desktop vs Mobile
   const [previewMode, setPreviewMode] = useState<'desktop' | 'mobile'>('desktop');
+
+  // Full Screen Desktop Preview State
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  // Exit fullscreen on Escape key
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isFullscreen) {
+        setIsFullscreen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isFullscreen]);
 
   // Selected Element for Right Sidebar editing
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -1016,6 +1034,312 @@ export default function ModernTemplateEditor({
     }
   };
 
+  const selectedIndex = elements.findIndex((el) => el.id === selectedId);
+
+  // Render email canvas elements cleanly without editor-only borders, toolbars, or handles
+  const renderEmailCanvasElements = (isMobile: boolean) => {
+    if (elements.length === 0) {
+      return (
+        <div className="py-20 text-center text-slate-400 space-y-3">
+          <LayoutTemplate className="w-10 h-10 mx-auto text-slate-300" />
+          <p className="text-sm font-semibold text-slate-600">Canvas is empty</p>
+          <p className="text-xs text-slate-400">
+            Pick a design from the left panel or click Elements to add content.
+          </p>
+        </div>
+      );
+    }
+
+    return (
+      <div className="divide-y divide-slate-100/30">
+        {elements.map((el) => {
+          const hPad = isMobile ? 16 : 24;
+          const vPad = isMobile ? Math.min(el.paddingY ?? 12, 16) : (el.paddingY ?? 12);
+
+          return (
+            <div
+              key={el.id}
+              onClick={() => setSelectedId(el.id)}
+              className="relative transition-all cursor-pointer"
+            >
+              {/* Element Visual Renderers (Clean Preview with zero editor controls or toolbars inside preview) */}
+              <div style={{ padding: `${vPad}px ${hPad}px` }}>
+                {/* 1. BRAND LOGO */}
+                {el.type === 'logo' && (
+                  <div
+                    style={{ textAlign: el.textAlign || 'center' }}
+                    className="w-full"
+                  >
+                    {el.imageUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={el.imageUrl}
+                        alt={el.altText || 'Brand Logo'}
+                        className={`${
+                          isMobile
+                            ? 'max-h-10 max-w-[140px]'
+                            : 'max-h-12 max-w-[180px]'
+                        } inline-block object-contain`}
+                      />
+                    ) : (
+                      <div className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-100 border border-dashed border-slate-300 text-xs text-slate-500 font-semibold">
+                        <ImageIcon className="w-4 h-4 text-slate-400" />
+                        <span>Click to upload Logo</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* 2. LARGE PROMOTIONAL BANNER */}
+                {el.type === 'banner' && (
+                  <div className="w-full text-center">
+                    {el.imageUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={el.imageUrl}
+                        alt={el.altText || 'Promotional Banner'}
+                        style={{
+                          borderRadius:
+                            templateStyle.cardBorderRadius === 'none'
+                              ? '0px'
+                              : isMobile
+                              ? '8px'
+                              : '12px',
+                        }}
+                        className="w-full h-auto object-cover shadow-xs"
+                      />
+                    ) : (
+                      <div
+                        className={`w-full ${
+                          isMobile ? 'h-36' : 'h-44'
+                        } rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 flex flex-col items-center justify-center text-slate-400 space-y-1`}
+                      >
+                        <ImageIcon className="w-8 h-8 text-slate-300" />
+                        <span className="text-xs font-bold text-slate-600">
+                          Upload Promotional Banner
+                        </span>
+                        <span className="text-[10px] text-slate-400">
+                          Click here or use the photo upload panel
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* 3. GENERAL IMAGE / PRODUCT PHOTO */}
+                {el.type === 'image' && (
+                  <div style={{ textAlign: el.textAlign || 'center' }}>
+                    {el.imageUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={el.imageUrl}
+                        alt={el.altText || 'Image'}
+                        style={{
+                          borderRadius:
+                            templateStyle.cardBorderRadius === 'none'
+                              ? '0px'
+                              : isMobile
+                              ? '6px'
+                              : '10px',
+                        }}
+                        className="max-w-full h-auto inline-block shadow-xs object-cover"
+                      />
+                    ) : (
+                      <div
+                        className={`w-full ${
+                          isMobile ? 'h-28' : 'h-36'
+                        } rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 flex items-center justify-center text-xs text-slate-400`}
+                      >
+                        Upload photo in settings
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* 4. PILL BADGE */}
+                {el.type === 'badge' && (
+                  <div style={{ textAlign: el.textAlign || 'center' }}>
+                    <span
+                      style={{
+                        backgroundColor: el.bgColor || '#EFF6FF',
+                        color: el.textColor || '#2563EB',
+                      }}
+                      className={`inline-block ${
+                        isMobile ? 'px-3 py-0.5 text-[10px]' : 'px-3.5 py-1 text-xs'
+                      } rounded-full font-bold uppercase tracking-wider shadow-2xs`}
+                    >
+                      {el.content || 'Special Announcement'}
+                    </span>
+                  </div>
+                )}
+
+                {/* 5. HEADING */}
+                {el.type === 'heading' && (
+                  <h1
+                    style={{
+                      textAlign: el.textAlign || 'center',
+                      color:
+                        el.textColor ||
+                        (templateStyle.canvasBgColor === '#0B0F19'
+                          ? '#F8FAFC'
+                          : '#0F172A'),
+                    }}
+                    className={`leading-tight break-words ${
+                      el.fontWeight === 'extrabold'
+                        ? 'font-extrabold'
+                        : el.fontWeight === 'bold'
+                        ? 'font-bold'
+                        : 'font-semibold'
+                    } ${
+                      isMobile
+                        ? el.fontSize === '2xl'
+                          ? 'text-xl'
+                          : el.fontSize === 'xl'
+                          ? 'text-lg'
+                          : 'text-base'
+                        : el.fontSize === '2xl'
+                        ? 'text-2xl'
+                        : el.fontSize === 'xl'
+                        ? 'text-xl'
+                        : 'text-lg'
+                    }`}
+                  >
+                    {el.content || 'Heading Title'}
+                  </h1>
+                )}
+
+                {/* 6. SUBHEADING */}
+                {el.type === 'subheading' && (
+                  <h2
+                    style={{
+                      textAlign: el.textAlign || 'center',
+                      color:
+                        el.textColor ||
+                        (templateStyle.canvasBgColor === '#0B0F19'
+                          ? '#94A3B8'
+                          : '#334155'),
+                    }}
+                    className={`${
+                      isMobile ? 'text-sm' : 'text-base sm:text-lg'
+                    } font-semibold leading-snug break-words`}
+                  >
+                    {el.content || 'Subheading text'}
+                  </h2>
+                )}
+
+                {/* 7. BODY TEXT */}
+                {el.type === 'text' && (
+                  <p
+                    style={{
+                      textAlign: el.textAlign || 'center',
+                      color:
+                        el.textColor ||
+                        (templateStyle.canvasBgColor === '#0B0F19'
+                          ? '#94A3B8'
+                          : '#475569'),
+                    }}
+                    className={`${
+                      isMobile ? 'text-xs leading-relaxed' : 'text-xs sm:text-sm leading-relaxed'
+                    } whitespace-pre-wrap break-words`}
+                  >
+                    {el.content || 'Add your text here...'}
+                  </p>
+                )}
+
+                {/* 8. FEATURE / COUPON CARD */}
+                {el.type === 'card' && (
+                  <div
+                    style={{
+                      backgroundColor: el.bgColor || '#F8FAFC',
+                      borderColor: el.borderColor || '#E2E8F0',
+                      color: el.textColor || '#1E293B',
+                      textAlign: el.textAlign || 'center',
+                    }}
+                    className={`w-full ${
+                      isMobile ? 'p-3 text-xs' : 'p-3.5 text-xs sm:text-sm'
+                    } rounded-xl border font-semibold leading-relaxed shadow-2xs break-words`}
+                  >
+                    {el.content || 'Card Highlight'}
+                  </div>
+                )}
+
+                {/* 9. CTA BUTTON */}
+                {el.type === 'button' && (
+                  <div style={{ textAlign: el.textAlign || 'center' }}>
+                    <span
+                      style={{
+                        backgroundColor:
+                          el.buttonColor ||
+                          templateStyle.primaryColor ||
+                          '#4F46E5',
+                        color: el.buttonTextColor || '#FFFFFF',
+                        borderRadius:
+                          el.borderRadius === 'full'
+                            ? '9999px'
+                            : el.borderRadius === 'lg'
+                            ? '12px'
+                            : el.borderRadius === 'sm'
+                            ? '4px'
+                            : el.borderRadius === 'none'
+                            ? '0px'
+                            : '8px',
+                      }}
+                      className={`inline-block ${
+                        isMobile
+                          ? 'px-5 py-2.5 text-xs'
+                          : 'px-6 py-3 text-xs sm:text-sm'
+                      } font-bold shadow-sm max-w-full text-center transition-transform active:scale-95`}
+                    >
+                      {el.content || 'Call to Action'}
+                    </span>
+                  </div>
+                )}
+
+                {/* 10. WEBSITE LINK */}
+                {el.type === 'link' && (
+                  <div style={{ textAlign: el.textAlign || 'center' }}>
+                    <span
+                      style={{
+                        color:
+                          el.textColor ||
+                          templateStyle.primaryColor ||
+                          '#4F46E5',
+                      }}
+                      className="text-xs font-semibold underline inline-flex items-center gap-1 break-all"
+                    >
+                      <span>{el.content || 'www.yourwebsite.com'}</span>
+                      <ExternalLink className="w-3 h-3 inline shrink-0" />
+                    </span>
+                  </div>
+                )}
+
+                {/* 11. DIVIDER */}
+                {el.type === 'divider' && (
+                  <div className="w-full border-t border-slate-200 my-1" />
+                )}
+
+                {/* 12. FOOTER */}
+                {el.type === 'footer' && (
+                  <div
+                    style={{
+                      textAlign: el.textAlign || 'center',
+                      color: el.textColor || '#94A3B8',
+                    }}
+                    className={`${
+                      isMobile ? 'text-[10px]' : 'text-[11px]'
+                    } leading-relaxed pt-2 border-t border-slate-100 break-words`}
+                  >
+                    {el.content}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
   return (
     <div className="flex flex-col h-screen bg-[#F8FAFC] overflow-hidden select-none">
       {/* 1. TOP TOOLBAR */}
@@ -1069,31 +1393,59 @@ export default function ModernTemplateEditor({
 
           <div className="h-4 w-px bg-slate-200 hidden sm:block" />
 
-          {/* Desktop / Mobile Toggle (Requirement 5) */}
-          <div className="flex items-center bg-slate-100 p-0.5 rounded-xl border border-slate-200/60 shadow-2xs">
+          {/* Desktop / Mobile Toggle & Fullscreen Mode */}
+          <div className="flex items-center gap-1.5">
+            <div className="flex items-center bg-slate-100 p-0.5 rounded-xl border border-slate-200/60 shadow-2xs">
+              <button
+                type="button"
+                onClick={() => setPreviewMode('desktop')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                  previewMode === 'desktop'
+                    ? 'bg-white text-indigo-600 shadow-xs font-bold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+                title="Desktop Email Preview"
+              >
+                <Monitor className="w-3.5 h-3.5" />
+                <span className="inline">Desktop</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setPreviewMode('mobile')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                  previewMode === 'mobile'
+                    ? 'bg-white text-indigo-600 shadow-xs font-bold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+                title="Mobile Phone Email Preview (375px)"
+              >
+                <Smartphone className="w-3.5 h-3.5" />
+                <span className="inline">Mobile</span>
+              </button>
+            </div>
+
+            {/* Full Screen Mode Toggle */}
             <button
               type="button"
-              onClick={() => setPreviewMode('desktop')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                previewMode === 'desktop'
-                  ? 'bg-white text-indigo-600 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
+              onClick={() => setIsFullscreen(!isFullscreen)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all ${
+                isFullscreen
+                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs hover:bg-indigo-700 font-bold'
+                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:text-slate-900 shadow-2xs'
               }`}
+              title={isFullscreen ? 'Exit Full Screen (Esc)' : 'Expand to Full Screen Preview'}
             >
-              <Monitor className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">Desktop</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setPreviewMode('mobile')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                previewMode === 'mobile'
-                  ? 'bg-white text-indigo-600 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <Smartphone className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">Mobile</span>
+              {isFullscreen ? (
+                <>
+                  <Minimize2 className="w-3.5 h-3.5 text-white" />
+                  <span className="hidden sm:inline">Exit Full Screen</span>
+                </>
+              ) : (
+                <>
+                  <Maximize2 className="w-3.5 h-3.5 text-indigo-600" />
+                  <span className="hidden sm:inline">Full Screen</span>
+                </>
+              )}
             </button>
           </div>
         </div>
@@ -1130,8 +1482,12 @@ export default function ModernTemplateEditor({
 
       {/* 2. MAIN WORKSPACE */}
       <div className="flex-1 flex overflow-hidden">
-        {/* LEFT SIDEBAR: Presets, Elements, Photos, Style */}
-        <aside className="w-80 bg-white border-r border-slate-200/80 flex flex-col z-10 flex-shrink-0 shadow-2xs">
+        {/* LEFT SIDEBAR: Presets, Elements, Photos, Style (Hidden in Full Screen mode) */}
+        <aside
+          className={`${
+            isFullscreen ? 'hidden' : 'flex'
+          } w-80 bg-white border-r border-slate-200/80 flex-col z-10 flex-shrink-0 shadow-2xs transition-all`}
+        >
           {/* Navigation Tabs */}
           <div className="flex items-center p-2 border-b border-slate-100 gap-1 text-xs">
             <button
@@ -1566,396 +1922,251 @@ export default function ModernTemplateEditor({
 
         {/* CENTER: VISUAL DIRECT CANVAS */}
         <main
-          className="flex-1 overflow-y-auto p-4 sm:p-8 flex justify-center items-start transition-colors"
+          className={`flex-1 overflow-y-auto ${
+            isFullscreen ? 'p-2 sm:p-6' : 'p-4 sm:p-8'
+          } flex flex-col items-center justify-start transition-colors`}
           style={{ backgroundColor: templateStyle.outerBgColor }}
         >
-          <div
-            className={`w-full transition-all duration-300 ${
-              previewMode === 'mobile' ? 'max-w-[375px]' : 'max-w-[600px]'
-            }`}
-          >
-            {/* Un-hosted Images Warning & 1-Click Host Banner */}
-            {unhostedCount > 0 && (
-              <div className="mb-4 p-3.5 rounded-2xl bg-amber-50 border border-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
-                    <BadgeAlert className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <p className="text-xs font-bold text-amber-900">
-                      {unhostedCount} Un-hosted Base64 Image{unhostedCount > 1 ? 's' : ''} Detected
-                    </p>
-                    <p className="text-[11px] text-amber-700">
-                      Gmail and Outlook block Base64 images and display broken icons. Host them to public HTTPS storage now.
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  disabled={isAutoHosting}
-                  onClick={handleAutoHostImages}
-                  className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shrink-0 transition-colors shadow-xs disabled:opacity-50"
-                >
-                  <Sparkles className={`w-3.5 h-3.5 ${isAutoHosting ? 'animate-spin' : ''}`} />
-                  <span>{isAutoHosting ? 'Uploading Images...' : 'Host on Server Now'}</span>
-                </button>
-              </div>
-            )}
+          {/* Floating Exit Fullscreen Button in Full Screen Mode */}
+          {isFullscreen && (
+            <div className="fixed top-20 right-6 z-50 animate-in fade-in slide-in-from-top-2">
+              <button
+                type="button"
+                onClick={() => setIsFullscreen(false)}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-900/90 hover:bg-slate-900 text-white text-xs font-semibold shadow-xl backdrop-blur-xs transition-all hover:scale-105 border border-slate-700/60"
+                title="Exit Full Screen (Esc)"
+              >
+                <Minimize2 className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Exit Full Screen</span>
+                <kbd className="text-[10px] text-slate-400 font-mono bg-slate-800 px-1.5 py-0.5 rounded ml-1 border border-slate-700">
+                  Esc
+                </kbd>
+              </button>
+            </div>
+          )}
 
-            {/* Visual Canvas Card */}
+          {/* Un-hosted Images Warning & 1-Click Host Banner (Shown above preview) */}
+          {unhostedCount > 0 && (
             <div
-              style={{
-                backgroundColor: templateStyle.canvasBgColor,
-                borderColor: templateStyle.cardBorder.includes('#')
-                  ? templateStyle.cardBorder.match(/#[0-9a-fA-F]{3,8}/)?.[0] || '#E2E8F0'
-                  : '#E2E8F0',
-                borderRadius:
-                  templateStyle.cardBorderRadius === '2xl'
-                    ? '24px'
-                    : templateStyle.cardBorderRadius === 'xl'
-                    ? '16px'
-                    : templateStyle.cardBorderRadius === 'sm'
-                    ? '4px'
-                    : templateStyle.cardBorderRadius === 'none'
-                    ? '0px'
-                    : '12px',
-              }}
-              className={`w-full shadow-lg border overflow-hidden transition-all ${
-                templateStyle.fontFamily === 'serif' ? 'font-serif' : 'font-sans'
+              className={`w-full mb-4 p-3.5 rounded-2xl bg-amber-50 border border-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm transition-all ${
+                previewMode === 'mobile'
+                  ? 'max-w-[375px]'
+                  : isFullscreen
+                  ? 'max-w-6xl 2xl:max-w-7xl'
+                  : 'max-w-5xl 2xl:max-w-6xl'
               }`}
             >
-              {elements.length === 0 ? (
-                <div className="py-20 text-center text-slate-400 space-y-3">
-                  <LayoutTemplate className="w-10 h-10 mx-auto text-slate-300" />
-                  <p className="text-sm font-semibold text-slate-600">Canvas is empty</p>
-                  <p className="text-xs text-slate-400">
-                    Pick a design from the left panel or click Elements to add content.
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+                  <BadgeAlert className="w-4 h-4" />
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-amber-900">
+                    {unhostedCount} Un-hosted Base64 Image{unhostedCount > 1 ? 's' : ''} Detected
+                  </p>
+                  <p className="text-[11px] text-amber-700">
+                    Gmail and Outlook block Base64 images and display broken icons. Host them to public HTTPS storage now.
                   </p>
                 </div>
-              ) : (
-                <div className="divide-y divide-slate-100/30">
-                  {elements.map((el, index) => {
-                    const isSelected = el.id === selectedId;
-
-                    return (
-                      <div
-                        key={el.id}
-                        onClick={() => setSelectedId(el.id)}
-                        className={`relative group transition-all cursor-pointer ${
-                          isSelected
-                            ? 'ring-2 ring-indigo-500/80 ring-offset-2 z-10'
-                            : 'hover:outline-1 hover:outline-dashed hover:outline-indigo-300'
-                        }`}
-                      >
-                        {/* Hover / Active Controls Bar */}
-                        {isSelected && (
-                          <div className="absolute -top-3.5 right-3 z-30 flex items-center bg-indigo-600 text-white rounded-lg shadow-md px-1.5 py-0.5 text-[10px] font-semibold gap-1">
-                            <span className="capitalize">{el.type}</span>
-                            <div className="h-2.5 w-px bg-white/40 mx-0.5" />
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                moveElement(el.id, 'up');
-                              }}
-                              disabled={index === 0}
-                              className="p-0.5 hover:bg-white/20 rounded disabled:opacity-30"
-                              title="Move Up"
-                            >
-                              <ChevronUp className="w-3 h-3" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                moveElement(el.id, 'down');
-                              }}
-                              disabled={index === elements.length - 1}
-                              className="p-0.5 hover:bg-white/20 rounded disabled:opacity-30"
-                              title="Move Down"
-                            >
-                              <ChevronDown className="w-3 h-3" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                duplicateElement(el.id);
-                              }}
-                              className="p-0.5 hover:bg-white/20 rounded"
-                              title="Duplicate"
-                            >
-                              <Copy className="w-3 h-3" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                deleteElement(el.id);
-                              }}
-                              className="p-0.5 hover:bg-rose-500 rounded text-white"
-                              title="Delete"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </button>
-                          </div>
-                        )}
-
-                        {/* Element Visual Renderers */}
-                        <div style={{ padding: `${el.paddingY ?? 12}px 24px` }}>
-                          {/* 1. BRAND LOGO */}
-                          {el.type === 'logo' && (
-                            <div
-                              style={{ textAlign: el.textAlign || 'center' }}
-                              className="w-full"
-                            >
-                              {el.imageUrl ? (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img
-                                  src={el.imageUrl}
-                                  alt={el.altText || 'Brand Logo'}
-                                  className="max-h-12 max-w-[180px] inline-block object-contain"
-                                />
-                              ) : (
-                                <div className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-100 border border-dashed border-slate-300 text-xs text-slate-500 font-semibold">
-                                  <ImageIcon className="w-4 h-4 text-slate-400" />
-                                  <span>Click to upload Logo</span>
-                                </div>
-                              )}
-                            </div>
-                          )}
-
-                          {/* 2. LARGE PROMOTIONAL BANNER */}
-                          {el.type === 'banner' && (
-                            <div className="w-full text-center">
-                              {el.imageUrl ? (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img
-                                  src={el.imageUrl}
-                                  alt={el.altText || 'Promotional Banner'}
-                                  style={{
-                                    borderRadius:
-                                      templateStyle.cardBorderRadius === 'none'
-                                        ? '0px'
-                                        : '12px',
-                                  }}
-                                  className="w-full h-auto object-cover shadow-xs"
-                                />
-                              ) : (
-                                <div className="w-full h-44 rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 flex flex-col items-center justify-center text-slate-400 space-y-1">
-                                  <ImageIcon className="w-8 h-8 text-slate-300" />
-                                  <span className="text-xs font-bold text-slate-600">
-                                    Upload Promotional Banner
-                                  </span>
-                                  <span className="text-[10px] text-slate-400">
-                                    Click here or use the photo upload panel
-                                  </span>
-                                </div>
-                              )}
-                            </div>
-                          )}
-
-                          {/* 3. GENERAL IMAGE / PRODUCT PHOTO */}
-                          {el.type === 'image' && (
-                            <div style={{ textAlign: el.textAlign || 'center' }}>
-                              {el.imageUrl ? (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img
-                                  src={el.imageUrl}
-                                  alt={el.altText || 'Image'}
-                                  style={{
-                                    borderRadius:
-                                      templateStyle.cardBorderRadius === 'none'
-                                        ? '0px'
-                                        : '10px',
-                                  }}
-                                  className="max-w-full h-auto inline-block shadow-xs"
-                                />
-                              ) : (
-                                <div className="w-full h-36 rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 flex items-center justify-center text-xs text-slate-400">
-                                  Upload photo in settings
-                                </div>
-                              )}
-                            </div>
-                          )}
-
-                          {/* 4. PILL BADGE */}
-                          {el.type === 'badge' && (
-                            <div style={{ textAlign: el.textAlign || 'center' }}>
-                              <span
-                                style={{
-                                  backgroundColor: el.bgColor || '#EFF6FF',
-                                  color: el.textColor || '#2563EB',
-                                }}
-                                className="inline-block px-3.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider shadow-2xs"
-                              >
-                                {el.content || 'Special Announcement'}
-                              </span>
-                            </div>
-                          )}
-
-                          {/* 5. HEADING */}
-                          {el.type === 'heading' && (
-                            <h1
-                              style={{
-                                textAlign: el.textAlign || 'center',
-                                color:
-                                  el.textColor ||
-                                  (templateStyle.canvasBgColor === '#0B0F19'
-                                    ? '#F8FAFC'
-                                    : '#0F172A'),
-                              }}
-                              className={`leading-tight ${
-                                el.fontWeight === 'extrabold'
-                                  ? 'font-extrabold'
-                                  : el.fontWeight === 'bold'
-                                  ? 'font-bold'
-                                  : 'font-semibold'
-                              } ${
-                                el.fontSize === '2xl'
-                                  ? 'text-2xl'
-                                  : el.fontSize === 'xl'
-                                  ? 'text-xl'
-                                  : 'text-lg'
-                              }`}
-                            >
-                              {el.content || 'Heading Title'}
-                            </h1>
-                          )}
-
-                          {/* 6. SUBHEADING */}
-                          {el.type === 'subheading' && (
-                            <h2
-                              style={{
-                                textAlign: el.textAlign || 'center',
-                                color:
-                                  el.textColor ||
-                                  (templateStyle.canvasBgColor === '#0B0F19'
-                                    ? '#94A3B8'
-                                    : '#334155'),
-                              }}
-                              className="text-base sm:text-lg font-semibold leading-snug"
-                            >
-                              {el.content || 'Subheading text'}
-                            </h2>
-                          )}
-
-                          {/* 7. BODY TEXT */}
-                          {el.type === 'text' && (
-                            <p
-                              style={{
-                                textAlign: el.textAlign || 'center',
-                                color:
-                                  el.textColor ||
-                                  (templateStyle.canvasBgColor === '#0B0F19'
-                                    ? '#94A3B8'
-                                    : '#475569'),
-                              }}
-                              className="text-xs sm:text-sm leading-relaxed whitespace-pre-wrap"
-                            >
-                              {el.content || 'Add your text here...'}
-                            </p>
-                          )}
-
-                          {/* 8. FEATURE / COUPON CARD */}
-                          {el.type === 'card' && (
-                            <div
-                              style={{
-                                backgroundColor: el.bgColor || '#F8FAFC',
-                                borderColor: el.borderColor || '#E2E8F0',
-                                color: el.textColor || '#1E293B',
-                                textAlign: el.textAlign || 'center',
-                              }}
-                              className="w-full p-3.5 rounded-xl border text-xs sm:text-sm font-semibold leading-relaxed shadow-2xs"
-                            >
-                              {el.content || 'Card Highlight'}
-                            </div>
-                          )}
-
-                          {/* 9. CTA BUTTON */}
-                          {el.type === 'button' && (
-                            <div style={{ textAlign: el.textAlign || 'center' }}>
-                              <span
-                                style={{
-                                  backgroundColor:
-                                    el.buttonColor ||
-                                    templateStyle.primaryColor ||
-                                    '#4F46E5',
-                                  color: el.buttonTextColor || '#FFFFFF',
-                                  borderRadius:
-                                    el.borderRadius === 'full'
-                                      ? '9999px'
-                                      : el.borderRadius === 'lg'
-                                      ? '12px'
-                                      : el.borderRadius === 'sm'
-                                      ? '4px'
-                                      : el.borderRadius === 'none'
-                                      ? '0px'
-                                      : '8px',
-                                }}
-                                className="inline-block px-6 py-3 text-xs sm:text-sm font-bold shadow-sm transition-transform active:scale-95"
-                              >
-                                {el.content || 'Call to Action'}
-                              </span>
-                            </div>
-                          )}
-
-                          {/* 10. WEBSITE LINK */}
-                          {el.type === 'link' && (
-                            <div style={{ textAlign: el.textAlign || 'center' }}>
-                              <span
-                                style={{
-                                  color:
-                                    el.textColor ||
-                                    templateStyle.primaryColor ||
-                                    '#4F46E5',
-                                }}
-                                className="text-xs font-semibold underline inline-flex items-center gap-1"
-                              >
-                                <span>{el.content || 'www.yourwebsite.com'}</span>
-                                <ExternalLink className="w-3 h-3 inline" />
-                              </span>
-                            </div>
-                          )}
-
-                          {/* 11. DIVIDER */}
-                          {el.type === 'divider' && (
-                            <div className="w-full border-t border-slate-200 my-1" />
-                          )}
-
-                          {/* 12. FOOTER */}
-                          {el.type === 'footer' && (
-                            <div
-                              style={{
-                                textAlign: el.textAlign || 'center',
-                                color: el.textColor || '#94A3B8',
-                              }}
-                              className="text-[11px] leading-relaxed pt-2 border-t border-slate-100"
-                            >
-                              {el.content}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+              </div>
+              <button
+                type="button"
+                disabled={isAutoHosting}
+                onClick={handleAutoHostImages}
+                className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shrink-0 transition-colors shadow-xs disabled:opacity-50"
+              >
+                <Sparkles className={`w-3.5 h-3.5 ${isAutoHosting ? 'animate-spin' : ''}`} />
+                <span>{isAutoHosting ? 'Uploading Images...' : 'Host on Server Now'}</span>
+              </button>
             </div>
-          </div>
+          )}
+
+          {previewMode === 'desktop' ? (
+            /* DESKTOP EMAIL PREVIEW CONTAINER (FULL SCREEN RESPONSIVE) */
+            <div
+              className={`w-full ${
+                isFullscreen
+                  ? 'max-w-6xl 2xl:max-w-7xl'
+                  : 'max-w-5xl 2xl:max-w-6xl'
+              } mx-auto transition-all duration-300`}
+            >
+              {/* Realistic Desktop Mail Client Chrome Header */}
+              <div className="bg-slate-100/90 border border-b-0 border-slate-200/90 rounded-t-2xl px-4 py-2.5 flex items-center justify-between text-xs text-slate-500 shadow-xs">
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className="flex items-center gap-1.5 mr-1.5 shrink-0">
+                    <div className="w-2.5 h-2.5 rounded-full bg-rose-400/80" />
+                    <div className="w-2.5 h-2.5 rounded-full bg-amber-400/80" />
+                    <div className="w-2.5 h-2.5 rounded-full bg-emerald-400/80" />
+                  </div>
+                  <span className="font-semibold text-slate-700 truncate text-xs">
+                    {subject || templateName}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 text-[11px] text-slate-400 shrink-0 ml-2">
+                  <span className="hidden sm:inline text-slate-500 font-medium">Desktop Preview</span>
+                  <button
+                    type="button"
+                    onClick={() => setIsFullscreen(!isFullscreen)}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-slate-700 hover:text-indigo-600 hover:border-indigo-300 font-semibold text-xs shadow-2xs transition-colors"
+                    title={isFullscreen ? 'Exit Full Screen (Esc)' : 'Expand Desktop Preview to Full Screen'}
+                  >
+                    {isFullscreen ? (
+                      <>
+                        <Minimize2 className="w-3.5 h-3.5 text-indigo-600" />
+                        <span>Exit Full Screen</span>
+                      </>
+                    ) : (
+                      <>
+                        <Maximize2 className="w-3.5 h-3.5 text-slate-600" />
+                        <span>Full Screen</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Visual Canvas Card */}
+              <div
+                style={{
+                  backgroundColor: templateStyle.canvasBgColor,
+                  borderColor: templateStyle.cardBorder.includes('#')
+                    ? templateStyle.cardBorder.match(/#[0-9a-fA-F]{3,8}/)?.[0] || '#E2E8F0'
+                    : '#E2E8F0',
+                  borderRadius:
+                    templateStyle.cardBorderRadius === '2xl'
+                      ? '0 0 24px 24px'
+                      : templateStyle.cardBorderRadius === 'xl'
+                      ? '0 0 16px 16px'
+                      : templateStyle.cardBorderRadius === 'sm'
+                      ? '0 0 4px 4px'
+                      : templateStyle.cardBorderRadius === 'none'
+                      ? '0px'
+                      : '0 0 12px 12px',
+                }}
+                className={`w-full shadow-lg border border-slate-200/90 overflow-hidden transition-all ${
+                  templateStyle.fontFamily === 'serif' ? 'font-serif' : 'font-sans'
+                }`}
+              >
+                {renderEmailCanvasElements(false)}
+              </div>
+            </div>
+          ) : (
+            /* MOBILE PHONE PREVIEW CONTAINER (320-390px, 375px centered) */
+            <div className="w-full max-w-[375px] mx-auto transition-all duration-300 flex flex-col items-center">
+              {/* Realistic Smartphone Mockup Chassis */}
+              <div className="w-[375px] max-w-full rounded-[44px] border-[9px] border-slate-900 bg-slate-900 shadow-2xl overflow-hidden flex flex-col transition-all">
+                {/* Top Mobile Status Bar & Notch */}
+                <div className="bg-slate-900 text-white px-6 pt-3 pb-2 flex items-center justify-between select-none">
+                  <span className="text-[11px] font-semibold text-slate-200 font-mono">9:41</span>
+                  {/* Dynamic Island / Speaker Pill */}
+                  <div className="w-20 h-4 bg-black rounded-full flex items-center justify-center gap-1.5 px-2">
+                    <div className="w-2 h-2 rounded-full bg-slate-900 border border-slate-700/60" />
+                    <div className="w-1.5 h-1.5 rounded-full bg-blue-900/40" />
+                  </div>
+                  {/* Status Icons: 5G & Battery */}
+                  <div className="flex items-center gap-1.5 text-slate-200">
+                    <span className="text-[10px] font-bold font-mono">5G</span>
+                    <div className="w-5 h-2.5 border border-slate-400/80 rounded-xs p-0.5 flex items-center">
+                      <div className="w-3 h-full bg-slate-200 rounded-2xs" />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Mobile Mail App Header Bar */}
+                <div className="bg-slate-800/95 px-4 py-2 flex items-center justify-between text-xs text-slate-300 border-b border-slate-700/60 select-none">
+                  <div className="flex items-center gap-1.5 truncate">
+                    <ChevronLeft className="w-4 h-4 text-indigo-400 shrink-0" />
+                    <span className="font-semibold text-slate-200 truncate text-[11px]">
+                      {subject || templateName}
+                    </span>
+                  </div>
+                  <span className="text-[10px] font-mono text-indigo-300 bg-slate-900 px-1.5 py-0.5 rounded border border-slate-700 shrink-0 ml-1">
+                    375px
+                  </span>
+                </div>
+
+                {/* Scrollable Email Body Viewport inside Mobile Frame */}
+                <div
+                  className="w-full max-h-[640px] overflow-y-auto overflow-x-hidden custom-scrollbar"
+                  style={{ backgroundColor: templateStyle.outerBgColor }}
+                >
+                  <div
+                    style={{
+                      backgroundColor: templateStyle.canvasBgColor,
+                      borderColor: templateStyle.cardBorder.includes('#')
+                        ? templateStyle.cardBorder.match(/#[0-9a-fA-F]{3,8}/)?.[0] || '#E2E8F0'
+                        : '#E2E8F0',
+                      borderRadius:
+                        templateStyle.cardBorderRadius === 'none' ? '0px' : '12px',
+                    }}
+                    className={`w-full shadow-sm border overflow-hidden transition-all ${
+                      templateStyle.fontFamily === 'serif' ? 'font-serif' : 'font-sans'
+                    }`}
+                  >
+                    {renderEmailCanvasElements(true)}
+                  </div>
+                </div>
+
+                {/* Bottom Home Indicator Bar */}
+                <div className="bg-slate-900 py-3 flex items-center justify-center select-none">
+                  <div className="w-28 h-1 bg-slate-600 rounded-full" />
+                </div>
+              </div>
+            </div>
+          )}
         </main>
 
-        {/* RIGHT SIDEBAR: Settings for Currently Selected Element Only */}
-        <aside className="w-80 bg-white border-l border-slate-200/80 flex flex-col z-10 flex-shrink-0 shadow-2xs">
-          <div className="p-4 border-b border-slate-100 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Sliders className="w-4 h-4 text-indigo-600" />
-              <h3 className="text-xs font-bold text-slate-800">Element Properties</h3>
+        {/* RIGHT SIDEBAR: Settings for Currently Selected Element Only (Hidden in Full Screen mode) */}
+        <aside
+          className={`${
+            isFullscreen ? 'hidden' : 'flex'
+          } w-80 bg-white border-l border-slate-200/80 flex-col z-10 flex-shrink-0 shadow-2xs transition-all`}
+        >
+          <div className="p-3.5 border-b border-slate-100 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <Sliders className="w-4 h-4 text-indigo-600 shrink-0" />
+              <h3 className="text-xs font-bold text-slate-800 truncate">Element Properties</h3>
             </div>
             {selectedElement && (
-              <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 uppercase font-bold">
-                {selectedElement.type}
-              </span>
+              <div className="flex items-center gap-1 shrink-0">
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-md bg-indigo-50 text-indigo-700 font-bold uppercase">
+                  {selectedElement.type}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => moveElement(selectedElement.id, 'up')}
+                  disabled={selectedIndex <= 0}
+                  className="p-1 rounded text-slate-500 hover:text-slate-800 hover:bg-slate-100 disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
+                  title="Move Up"
+                >
+                  <ChevronUp className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => moveElement(selectedElement.id, 'down')}
+                  disabled={selectedIndex >= elements.length - 1}
+                  className="p-1 rounded text-slate-500 hover:text-slate-800 hover:bg-slate-100 disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
+                  title="Move Down"
+                >
+                  <ChevronDown className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => duplicateElement(selectedElement.id)}
+                  className="p-1 rounded text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors"
+                  title="Duplicate"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedId(null)}
+                  className="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+                  title="Deselect"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
             )}
           </div>
 

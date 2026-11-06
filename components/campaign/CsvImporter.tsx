@@ -421,6 +421,9 @@ export default function CsvImporter({
               selectedNameCol={importResult.selectedNameCol || null}
               onTargetColChange={handleTargetColChange}
               onNameColChange={handleNameColChange}
+              fileName={importResult.fileName}
+              totalRows={importResult.summary.totalRows}
+              detectedCol={importResult.summary.columnDetected}
             />
           )}
 

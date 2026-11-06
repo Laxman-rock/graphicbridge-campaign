@@ -45,6 +45,7 @@ import CsvImporter from '@/components/campaign/CsvImporter';
 import ImageUploader from './ImageUploader';
 import EmailPreviewModal from './EmailPreviewModal';
 
+
 interface EmailCampaignWizardProps {
   onCampaignCreated?: () => void;
 }
@@ -160,6 +161,7 @@ export default function EmailCampaignWizard({
     setImportResult(result);
     if (!campaignName) {
       const baseName = result.fileName.replace(/\.csv$/i, '');
+
       setCampaignName(`${baseName} Campaign`);
     }
     setStep(2);

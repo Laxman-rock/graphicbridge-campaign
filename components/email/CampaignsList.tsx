@@ -36,6 +36,37 @@ import {
 } from '@/lib/email-api';
 import { useToast } from '@/components/ui/Toast';
 
+// Helper to format campaign name to show only the first 3 words (e.g. coimbatore_corporate_marketing)
+export function formatCampaignDisplayName(name?: string): string {
+  if (!name || typeof name !== 'string') return '';
+  const trimmed = name.trim();
+
+  // If underscore delimited (e.g. coimbatore_corporate_marketing_manager_emails...)
+  if (trimmed.includes('_')) {
+    const parts = trimmed.split('_').filter(Boolean);
+    if (parts.length >= 3) {
+      return parts.slice(0, 3).join('_');
+    }
+    return trimmed;
+  }
+
+  // If space delimited (e.g. Coimbatore Corporate Marketing Manager...)
+  const spaceParts = trimmed.split(/\s+/).filter(Boolean);
+  if (spaceParts.length >= 3) {
+    return spaceParts.slice(0, 3).join(' ');
+  }
+
+  // If hyphen delimited (e.g. coimbatore-corporate-marketing-manager...)
+  if (trimmed.includes('-')) {
+    const hyphenParts = trimmed.split('-').filter(Boolean);
+    if (hyphenParts.length >= 3) {
+      return hyphenParts.slice(0, 3).join('-');
+    }
+  }
+
+  return trimmed;
+}
+
 // Helper to normalize and reconcile campaign summary and progress data from any backend response shape
 function normalizeCampaignSummary(raw: any): EmailCampaignSummary {
   if (!raw || typeof raw !== 'object') {
@@ -613,7 +644,9 @@ export default function CampaignsList() {
                       className="hover:bg-slate-50/70 transition-colors"
                     >
                       <td className="py-4 px-5">
-                        <div className="font-bold text-slate-900">{camp.campaign_name}</div>
+                        <div className="font-bold text-slate-900" title={camp.campaign_name}>
+                          {formatCampaignDisplayName(camp.campaign_name)}
+                        </div>
                         <div className="text-[10px] font-mono text-slate-400">
                           ID: {camp._id || camp.id}
                         </div>
@@ -744,7 +777,7 @@ export default function CampaignsList() {
                   <Mail className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-slate-900">
+                  <h3 className="text-base font-bold text-slate-900 break-words">
                     {campaignDetail?.campaign_name || 'Campaign Details'}
                   </h3>
                   <p className="text-xs text-slate-500">
@@ -828,6 +861,12 @@ export default function CampaignsList() {
 
                   {/* Subject and Template info */}
                   <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 space-y-2 text-xs">
+                    <div>
+                      <span className="font-semibold text-slate-500">Campaign / Company Name: </span>
+                      <span className="font-bold text-slate-900 break-words">
+                        {campaignDetail.campaign_name}
+                      </span>
+                    </div>
                     <div>
                       <span className="font-semibold text-slate-500">Subject: </span>
                       <span className="font-bold text-slate-900">{campaignDetail.subject}</span>

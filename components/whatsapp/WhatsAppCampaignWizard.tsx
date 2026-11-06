@@ -42,6 +42,7 @@ import CsvImporter from '@/components/campaign/CsvImporter';
 import ImageUploadArea from '@/components/common/ImageUploadArea';
 import WhatsAppBubblePreview from './WhatsAppBubblePreview';
 
+
 // Helper to render body message with highlighted variable chips
 function renderHighlightedTemplateBody(text: string) {
   if (!text) return <span className="text-slate-400 italic">(Empty body message)</span>;
@@ -297,6 +298,7 @@ export default function WhatsAppCampaignWizard({
     setImportResult(result);
     if (!campaignName) {
       const baseName = result.fileName.replace(/\.csv$/i, '');
+
       setCampaignName(`${baseName} WhatsApp Campaign`);
     }
     setStep(2);
