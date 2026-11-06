@@ -15,13 +15,20 @@ export type WhatsAppCampaignStatus =
   | 'failed'
   | 'partially_failed';
 
-export type WhatsAppRecipientStatus = 'queued' | 'processing' | 'sent' | 'failed';
+export type WhatsAppRecipientStatus =
+  | 'queued'
+  | 'sending'
+  | 'accepted'
+  | 'failed'
+  | 'processing'
+  | 'sent';
 
 export interface WhatsAppRecipientObject {
-  phone: string;
   whatsapp_number?: string;
+  phone?: string;
   name?: string;
   variables?: Record<string, string>;
+  whatsapp_opt_in?: boolean;
 }
 
 export type WhatsAppRecipientInput = string | WhatsAppRecipientObject;
@@ -112,29 +119,34 @@ export interface SyncTemplatesResponse {
 // 3. WhatsApp Campaign
 export interface CreateWhatsAppCampaignRequest {
   campaign_name: string;
-  mode: WhatsAppCampaignMode;
-  message_type?: WhatsAppMessageType;
-  template_id?: string;
   template_name?: string;
   language_code?: string;
-  whatsapp_opt_in?: boolean;
-  variables?: Record<string, string>;
-  recipients: WhatsAppRecipientInput[];
-  content?: string;
+  media_id?: string;
   media_url?: string;
   header_image_url?: string;
   media_filename?: string;
   media_caption?: string;
+  default_opt_in?: boolean;
+  whatsapp_opt_in?: boolean;
+  recipients: WhatsAppRecipientInput[];
+  mode?: WhatsAppCampaignMode;
+  message_type?: WhatsAppMessageType;
+  template_id?: string;
+  variables?: Record<string, string>;
+  content?: string;
 }
 
 export interface WhatsAppCampaignRecipientRecord {
   phone: string;
+  whatsapp_number?: string;
   name?: string;
   variables?: Record<string, string>;
   status: WhatsAppRecipientStatus;
   sent_at?: string | null;
   message_id?: string | null;
   error_message?: string | null;
+  diagnostic_reason?: string | null;
+  whatsapp_opt_in?: boolean;
   attempts?: number;
 }
 
@@ -168,6 +180,7 @@ export interface CreateWhatsAppCampaignResponse {
   success: boolean;
   message?: string;
   data?: WhatsAppCampaignDetail;
+  campaign?: WhatsAppCampaignDetail;
   error?: string;
 }
 
@@ -193,11 +206,14 @@ export interface WhatsAppCampaignListResponse {
 export interface GetWhatsAppCampaignResponse {
   success: boolean;
   data?: WhatsAppCampaignDetail;
+  campaign?: WhatsAppCampaignDetail;
+  message?: string;
   error?: string;
 }
 
 export interface RetryWhatsAppCampaignResponse {
   success: boolean;
+  retried_count?: number;
   count?: number;
   message?: string;
   error?: string;

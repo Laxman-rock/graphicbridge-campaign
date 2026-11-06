@@ -15,11 +15,13 @@ import {
   Phone,
   Trash2,
   AlertCircle,
+  Info,
 } from 'lucide-react';
 import {
   WhatsAppCampaignSummary,
   WhatsAppCampaignDetail,
   WhatsAppCampaignStatus,
+  WhatsAppRecipientStatus,
   WhatsAppCampaignMode,
   WhatsAppQueueStatusResponse,
 } from '@/types/whatsapp';
@@ -29,6 +31,8 @@ import {
   retryWhatsAppCampaign,
   getWhatsAppQueueStatus,
   deleteWhatsAppCampaign,
+  calculateCampaignMetrics,
+  getFriendlyDiagnosticReason,
 } from '@/lib/whatsapp-api';
 import { useToast } from '@/components/ui/Toast';
 
@@ -161,10 +165,13 @@ export default function WhatsAppCampaignsList() {
     fetchQueue();
   }, [fetchCampaigns]);
 
-  // Auto-refresh when any campaigns are queued or processing
+  // Auto-refresh when any campaigns are queued, sending, or processing
   useEffect(() => {
     const hasActive = campaigns.some(
-      (c) => c.status === 'processing' || c.status === 'queued'
+      (c) =>
+        (c.status as string) === 'processing' ||
+        (c.status as string) === 'sending' ||
+        c.status === 'queued'
     );
     if (!hasActive) return;
 
@@ -176,11 +183,15 @@ export default function WhatsAppCampaignsList() {
     return () => clearInterval(timer);
   }, [campaigns, fetchCampaigns]);
 
-  const handleOpenDetail = async (id: string | number) => {
+  const handleOpenDetail = async (
+    id: string | number,
+    fallbackId?: string | number,
+    isSilent = false
+  ) => {
     setSelectedCampaignId(id);
-    setIsLoadingDetail(true);
+    if (!isSilent) setIsLoadingDetail(true);
     try {
-      const res = await getWhatsAppCampaign(id);
+      const res = await getWhatsAppCampaign(id, fallbackId);
       if (res.success && res.data) {
         const detail = res.data;
         const recs = detail.recipients || [];
@@ -190,11 +201,18 @@ export default function WhatsAppCampaignsList() {
         let resolvedSent = detail.sent_count;
 
         if (recs.length > 0) {
-          const sentRecs = recs.filter((r) => r.status === 'sent').length;
+          const sentRecs = recs.filter(
+            (r) => r.status === 'accepted' || (r.status as string) === 'sent'
+          ).length;
           const failedRecs = recs.filter((r) => r.status === 'failed').length;
-          const allSent = recs.every((r) => r.status === 'sent');
+          const allSent = recs.every(
+            (r) => r.status === 'accepted' || (r.status as string) === 'sent'
+          );
           const noPending = !recs.some(
-            (r) => r.status === 'queued' || r.status === 'processing'
+            (r) =>
+              r.status === 'queued' ||
+              r.status === 'sending' ||
+              (r.status as string) === 'processing'
           );
 
           if (allSent || (sentRecs > 0 && noPending)) {
@@ -226,7 +244,9 @@ export default function WhatsAppCampaignsList() {
 
         setCampaigns((prev) =>
           prev.map((c) =>
-            c._id === id || c.id === id
+            c._id === id ||
+            c.id === id ||
+            (fallbackId && (c._id === fallbackId || c.id === fallbackId))
               ? {
                   ...c,
                   status: resolvedStatus,
@@ -236,27 +256,63 @@ export default function WhatsAppCampaignsList() {
               : c
           )
         );
-      } else {
+      } else if (!isSilent) {
         toastError(res.error || 'Failed to fetch campaign details.', 'Error');
       }
     } catch {
-      toastError('Could not load campaign details.', 'Error');
+      if (!isSilent) {
+        toastError('Could not load campaign details.', 'Error');
+      }
     } finally {
-      setIsLoadingDetail(false);
+      if (!isSilent) setIsLoadingDetail(false);
     }
   };
 
-  const handleRetryFailed = async (id: string | number) => {
+  // Live auto-refresh for open details modal while campaign is queued or sending
+  useEffect(() => {
+    if (!selectedCampaignId || !campaignDetail) return;
+    const s = (campaignDetail.status as string || '').toLowerCase();
+    const isActive = s === 'queued' || s === 'sending' || s === 'processing';
+    if (!isActive) return;
+
+    const timer = setInterval(() => {
+      const primary = campaignDetail.id ?? campaignDetail._id ?? selectedCampaignId;
+      const fallback = campaignDetail._id ?? campaignDetail.id;
+      handleOpenDetail(primary, fallback, true);
+    }, 3000);
+
+    return () => clearInterval(timer);
+  }, [selectedCampaignId, campaignDetail?.status, campaignDetail?.id, campaignDetail?._id]);
+
+  const handleRetryFailed = async (id: string | number, fallbackId?: string | number) => {
+    if (isRetrying) return;
+    const currentStatus = campaignDetail?.status;
+    if (
+      (currentStatus as string) === 'sending' ||
+      (currentStatus as string) === 'processing'
+    ) {
+      toastError(
+        'Campaign is currently sending dispatches. Please wait until finished.',
+        'Retry Unavailable'
+      );
+      return;
+    }
+
     setIsRetrying(true);
     try {
-      const res = await retryWhatsAppCampaign(id);
+      const res = await retryWhatsAppCampaign(id, fallbackId);
       if (res.success) {
+        const retriedCount =
+          res.retried_count ??
+          res.count ??
+          campaignDetail?.failed_count ??
+          0;
         toastSuccess(
-          res.message || `Retrying ${res.count ?? 0} failed recipients.`,
+          res.message || `Retry queued for ${retriedCount} recipients.`,
           'Retry Queued'
         );
-        await handleOpenDetail(id);
-        fetchCampaigns();
+        await handleOpenDetail(id, fallbackId);
+        fetchCampaigns(true);
       } else {
         toastError(res.error || 'Failed to retry recipients.', 'Retry Failed');
       }
@@ -269,12 +325,21 @@ export default function WhatsAppCampaignsList() {
 
   const handleDeleteCampaign = async () => {
     if (!campaignToDelete) return;
-    const campId = campaignToDelete._id || campaignToDelete.id;
+    const campId = campaignToDelete.id ?? campaignToDelete._id;
+    const fallbackId = campaignToDelete._id ?? campaignToDelete.id;
     setIsDeleting(true);
     try {
-      const res = await deleteWhatsAppCampaign(campId);
-      setCampaigns((prev) => prev.filter((c) => (c._id || c.id) !== campId));
-      if (selectedCampaignId === campId) {
+      const res = await deleteWhatsAppCampaign(campId, fallbackId);
+      setCampaigns((prev) =>
+        prev.filter(
+          (c) =>
+            c.id !== campId &&
+            c._id !== campId &&
+            c.id !== fallbackId &&
+            c._id !== fallbackId
+        )
+      );
+      if (selectedCampaignId === campId || selectedCampaignId === fallbackId) {
         setSelectedCampaignId(null);
         setCampaignDetail(null);
       }
@@ -303,29 +368,31 @@ export default function WhatsAppCampaignsList() {
     }
   };
 
-  const getStatusBadge = (status: WhatsAppCampaignStatus | 'sent' | string) => {
+  const getCampaignStatusBadge = (status: WhatsAppCampaignStatus | string) => {
     const s = (status || '').toLowerCase();
     switch (s) {
       case 'completed':
+      case 'accepted':
       case 'sent':
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-            Sent
+            Accepted
           </span>
         );
       case 'queued':
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
-            <Clock className="w-3.5 h-3.5 text-blue-600" />
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+            <Clock className="w-3.5 h-3.5 text-slate-500" />
             Queued
           </span>
         );
+      case 'sending':
       case 'processing':
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">
-            <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-600" />
-            Processing
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+            <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-600" />
+            Sending...
           </span>
         );
       case 'partially_failed':
@@ -338,13 +405,55 @@ export default function WhatsAppCampaignsList() {
       case 'failed':
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200">
-            <XCircle className="w-3.5 h-3.5 text-rose-600" />
+            <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
             Failed
           </span>
         );
       default:
         return (
           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-700 capitalize">
+            {status}
+          </span>
+        );
+    }
+  };
+
+  const getRecipientStatusBadge = (status: WhatsAppRecipientStatus | string) => {
+    const s = (status || '').toLowerCase();
+    switch (s) {
+      case 'accepted':
+      case 'sent':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+            <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+            Accepted
+          </span>
+        );
+      case 'sending':
+      case 'processing':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+            <RefreshCw className="w-3 h-3 animate-spin text-blue-600" />
+            Sending...
+          </span>
+        );
+      case 'queued':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+            <Clock className="w-3 h-3 text-slate-500" />
+            Queued
+          </span>
+        );
+      case 'failed':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-rose-50 text-rose-700 border border-rose-200">
+            <AlertCircle className="w-3 h-3 text-rose-600" />
+            Failed
+          </span>
+        );
+      default:
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-600 capitalize">
             {status}
           </span>
         );
@@ -406,8 +515,8 @@ export default function WhatsAppCampaignsList() {
             >
               <option value="all">All Statuses</option>
               <option value="queued">Queued</option>
-              <option value="processing">Processing</option>
-              <option value="completed">Completed</option>
+              <option value="sending">Sending...</option>
+              <option value="completed">Accepted</option>
               <option value="partially_failed">Partially Failed</option>
               <option value="failed">Failed</option>
             </select>
@@ -492,7 +601,7 @@ export default function WhatsAppCampaignsList() {
                     : 'completed'
                     : camp.status;
 
-                  const progressPct = total > 0 ? Math.round((sent / total) * 100) : 0;
+                  const { progress, successRate } = calculateCampaignMetrics(total, sent, failed);
 
                   return (
                     <tr
@@ -504,7 +613,7 @@ export default function WhatsAppCampaignsList() {
                           {formatCampaignDisplayName(camp.campaign_name)}
                         </div>
                         <div className="text-[10px] font-mono text-slate-400">
-                          ID: {camp._id || camp.id}
+                          ID: {camp.id ?? camp._id}
                         </div>
                       </td>
                       <td className="py-4 px-4">
@@ -519,35 +628,42 @@ export default function WhatsAppCampaignsList() {
                           )}
                         </div>
                       </td>
-                      <td className="py-4 px-4 min-w-[160px]">
-                        <div className="space-y-1">
-                          <div className="flex justify-between text-[11px] font-medium text-slate-600">
+                      <td className="py-4 px-4 min-w-[180px]">
+                        <div className="space-y-1.5">
+                          <div className="flex justify-between items-center text-[11px] font-medium text-slate-700">
                             <span>
-                              {sent}/{total} sent
+                              <strong className="text-emerald-700 font-bold">{sent}</strong>/{total} accepted
                             </span>
                             {failed > 0 && (
-                              <span className="text-rose-600 font-semibold">
+                              <span className="text-rose-600 font-semibold flex items-center gap-0.5">
+                                <AlertCircle className="w-3 h-3 inline" />
                                 {failed} failed
                               </span>
                             )}
                           </div>
-                          <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden flex">
+                          <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden flex">
                             <div
-                              style={{ width: `${progressPct}%` }}
-                              className="bg-emerald-500 h-full rounded-full transition-all"
+                              style={{ width: `${total > 0 ? Math.min(100, Math.round((sent / total) * 100)) : 0}%` }}
+                              className="bg-emerald-500 h-full transition-all"
+                              title={`${sent} accepted (${successRate}%)`}
                             />
                             {failed > 0 && (
                               <div
                                 style={{
-                                  width: `${Math.round((failed / total) * 100)}%`,
+                                  width: `${total > 0 ? Math.min(100, Math.round((failed / total) * 100)) : 0}%`,
                                 }}
                                 className="bg-rose-500 h-full transition-all"
+                                title={`${failed} failed`}
                               />
                             )}
                           </div>
+                          <div className="flex items-center justify-between text-[10px] text-slate-400">
+                            <span>Progress: {progress}%</span>
+                            <span>Success: {successRate}%</span>
+                          </div>
                         </div>
                       </td>
-                      <td className="py-4 px-4">{getStatusBadge(displayStatus)}</td>
+                      <td className="py-4 px-4">{getCampaignStatusBadge(displayStatus)}</td>
                       <td className="py-4 px-4 text-slate-500 text-[11px]">
                         {new Date(camp.created_at).toLocaleDateString()}
                       </td>
@@ -555,7 +671,12 @@ export default function WhatsAppCampaignsList() {
                         <div className="flex items-center justify-end gap-1.5">
                           <button
                             type="button"
-                            onClick={() => handleOpenDetail(camp._id || camp.id)}
+                            onClick={() =>
+                              handleOpenDetail(
+                                camp.id ?? camp._id,
+                                camp._id ?? camp.id
+                              )
+                            }
                             className="p-2 rounded-xl border border-slate-200 bg-white text-slate-600 hover:text-emerald-600 hover:bg-slate-50 hover:border-emerald-200 transition-colors shadow-2xs"
                             title="Preview Campaign"
                             aria-label="Preview Campaign"
@@ -624,22 +745,40 @@ export default function WhatsAppCampaignsList() {
                     {campaignDetail?.campaign_name || 'Campaign Details'}
                   </h3>
                   <p className="text-xs text-slate-500">
-                    ID: {selectedCampaignId} • Mode:{' '}
+                    ID: {campaignDetail?.id ?? campaignDetail?._id ?? selectedCampaignId} • Mode:{' '}
                     <span className="capitalize font-medium">{campaignDetail?.mode || '...'}</span>
                   </p>
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedCampaignId(null);
-                  setCampaignDetail(null);
-                }}
-                className="p-2 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-200/60 transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const primary =
+                      campaignDetail?.id ?? campaignDetail?._id ?? selectedCampaignId;
+                    const fallback = campaignDetail?._id ?? campaignDetail?.id;
+                    if (primary) handleOpenDetail(primary, fallback);
+                  }}
+                  disabled={isLoadingDetail}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 shadow-2xs transition-colors disabled:opacity-50"
+                  title="Refresh campaign status"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isLoadingDetail ? 'animate-spin' : ''}`} />
+                  <span className="hidden sm:inline">Refresh</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedCampaignId(null);
+                    setCampaignDetail(null);
+                  }}
+                  className="p-2 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-200/60 transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
             <div className="flex-1 p-6 overflow-y-auto space-y-6">
@@ -653,48 +792,113 @@ export default function WhatsAppCampaignsList() {
                   {/* Status & Counts */}
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
                     <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-100">
-                      <span className="text-slate-400">Status:</span>
-                      <div className="mt-1">{getStatusBadge(campaignDetail.status)}</div>
+                      <span className="text-slate-400 font-medium">Status:</span>
+                      <div className="mt-1">{getCampaignStatusBadge(campaignDetail.status)}</div>
                     </div>
                     <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-100">
-                      <span className="text-slate-400">Total Contacts:</span>
+                      <span className="text-slate-400 font-medium">Total Contacts:</span>
                       <p className="text-base font-bold text-slate-900 mt-0.5">
-                        {campaignDetail.total_recipients}
+                        {campaignDetail.total_recipients || 0}
                       </p>
                     </div>
                     <div className="p-3.5 rounded-2xl bg-emerald-50/60 border border-emerald-100">
-                      <span className="text-emerald-700">Delivered:</span>
+                      <span className="text-emerald-700 font-medium">Accepted:</span>
                       <p className="text-base font-bold text-emerald-700 mt-0.5">
-                        {campaignDetail.sent_count}
+                        {campaignDetail.sent_count || 0}
                       </p>
                     </div>
                     <div className="p-3.5 rounded-2xl bg-rose-50/60 border border-rose-100">
-                      <span className="text-rose-700">Failed:</span>
+                      <span className="text-rose-700 font-medium">Failed:</span>
                       <p className="text-base font-bold text-rose-700 mt-0.5">
-                        {campaignDetail.failed_count}
+                        {campaignDetail.failed_count || 0}
                       </p>
                     </div>
                   </div>
 
+                  {/* Progress & Success Bar */}
+                  {(() => {
+                    const metrics = calculateCampaignMetrics(
+                      campaignDetail.total_recipients || 0,
+                      campaignDetail.sent_count || 0,
+                      campaignDetail.failed_count || 0
+                    );
+                    const total = campaignDetail.total_recipients || 0;
+                    const sent = campaignDetail.sent_count || 0;
+                    const failed = campaignDetail.failed_count || 0;
+                    return (
+                      <div className="p-3.5 rounded-2xl bg-slate-50/80 border border-slate-200/80 space-y-2">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="font-semibold text-slate-700">
+                            Dispatch Progress: <strong className="text-slate-900">{metrics.progress}%</strong> ({sent + failed}/{total})
+                          </span>
+                          <span className="font-semibold text-emerald-700">
+                            Success Rate: {metrics.successRate}%
+                          </span>
+                        </div>
+                        <div className="w-full bg-slate-200/80 h-2 rounded-full overflow-hidden flex">
+                          <div
+                            style={{
+                              width: `${total > 0 ? Math.min(100, Math.round((sent / total) * 100)) : 0}%`,
+                            }}
+                            className="bg-emerald-500 h-full transition-all"
+                            title={`${sent} accepted (${metrics.successRate}%)`}
+                          />
+                          {failed > 0 && (
+                            <div
+                              style={{
+                                width: `${total > 0 ? Math.min(100, Math.round((failed / total) * 100)) : 0}%`,
+                              }}
+                              className="bg-rose-500 h-full transition-all"
+                              title={`${failed} failed`}
+                            />
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Campaign Details Informational Notice */}
+                  <div className="p-3.5 rounded-2xl bg-blue-50/60 border border-blue-200/70 flex items-start gap-2.5 text-xs text-blue-900">
+                    <Info className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                    <p className="leading-relaxed">
+                      Accepted status confirms Meta received and accepted the message. Final handset delivery can be monitored in Meta WhatsApp Manager &gt; Insights &gt; Message logs.
+                    </p>
+                  </div>
+
                   {/* Retry Failed Option */}
-                  {campaignDetail.failed_count > 0 && (
+                  {(campaignDetail.status === 'partially_failed' ||
+                    campaignDetail.status === 'failed' ||
+                    campaignDetail.failed_count > 0) && (
                     <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
                       <div>
                         <h5 className="font-bold text-amber-900">
                           {campaignDetail.failed_count} numbers failed delivery
                         </h5>
                         <p className="text-amber-700 mt-0.5">
-                          Retry failed recipients with automatic exponential backoff.
+                          Retry failed recipients with automatic exponential backoff. Accepted recipients will not be re-sent.
                         </p>
                       </div>
                       <button
                         type="button"
-                        onClick={() => handleRetryFailed(campaignDetail._id || campaignDetail.id)}
-                        disabled={isRetrying}
+                        onClick={() =>
+                          handleRetryFailed(
+                            campaignDetail.id ?? campaignDetail._id,
+                            campaignDetail._id ?? campaignDetail.id
+                          )
+                        }
+                        disabled={
+                          isRetrying ||
+                          (campaignDetail.status as string) === 'sending' ||
+                          (campaignDetail.status as string) === 'processing'
+                        }
                         className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-semibold shadow-sm transition-all disabled:opacity-50 flex-shrink-0"
                       >
                         <RotateCcw className={`w-3.5 h-3.5 ${isRetrying ? 'animate-spin' : ''}`} />
-                        <span>Retry Failed ({campaignDetail.failed_count})</span>
+                        <span>
+                          {isRetrying
+                            ? 'Queueing Retry...'
+                            : `Retry Failed Recipients (${campaignDetail.failed_count})`}
+                        </span>
                       </button>
                     </div>
                   )}
@@ -749,49 +953,59 @@ export default function WhatsAppCampaignsList() {
                     <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
                       Recipient Delivery Details ({campaignDetail.recipients?.length || 0})
                     </h4>
-                    <div className="border border-slate-200 rounded-2xl overflow-hidden max-h-64 overflow-y-auto">
+                    <div className="border border-slate-200 rounded-2xl overflow-hidden max-h-72 overflow-y-auto">
                       <table className="w-full text-left border-collapse text-xs">
                         <thead className="bg-slate-50 sticky top-0 border-b border-slate-200 text-[10px] font-semibold text-slate-500 uppercase">
                           <tr>
                             <th className="py-2.5 px-4">Mobile Number</th>
                             <th className="py-2.5 px-3">Name</th>
                             <th className="py-2.5 px-3">Status</th>
-                            <th className="py-2.5 px-3">Details / Message ID</th>
+                            <th className="py-2.5 px-3">Details / Diagnostics</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                           {campaignDetail.recipients?.map((rec, idx) => (
                             <tr key={idx} className="hover:bg-slate-50/50">
                               <td className="py-2.5 px-4 font-mono font-medium text-slate-800">
-                                {rec.phone}
+                                {rec.whatsapp_number || rec.phone}
                               </td>
                               <td className="py-2.5 px-3 text-slate-600">{rec.name || '—'}</td>
                               <td className="py-2.5 px-3">
-                                {rec.status === 'sent' ? (
-                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
-                                    Sent
-                                  </span>
-                                ) : rec.status === 'failed' ? (
-                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800">
-                                    Failed
-                                  </span>
-                                ) : (
-                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800">
-                                    Queued
-                                  </span>
-                                )}
+                                {getRecipientStatusBadge(rec.status)}
                               </td>
-                              <td className="py-2.5 px-3 text-slate-500 text-[11px] truncate max-w-xs">
-                                {rec.error_message ? (
-                                  <span className="text-rose-600 font-medium">
-                                    {rec.error_message}
-                                  </span>
+                              <td className="py-2.5 px-3 text-slate-500 text-[11px]">
+                                {rec.status === 'failed' ? (
+                                  <div className="space-y-1 py-1 max-w-sm">
+                                    <div className="flex items-center gap-1.5 text-rose-700 font-semibold">
+                                      <AlertCircle className="w-3.5 h-3.5 shrink-0 text-rose-600" />
+                                      <span>
+                                        {getFriendlyDiagnosticReason(rec.diagnostic_reason)}
+                                      </span>
+                                    </div>
+                                    {rec.diagnostic_reason && (
+                                      <div>
+                                        <span className="inline-block px-1.5 py-0.5 font-mono text-[9px] rounded bg-rose-100 text-rose-800 border border-rose-200">
+                                          {rec.diagnostic_reason}
+                                        </span>
+                                      </div>
+                                    )}
+                                    {rec.error_message && (
+                                      <p className="text-[11px] text-rose-600 leading-snug break-words">
+                                        {rec.error_message}
+                                      </p>
+                                    )}
+                                  </div>
                                 ) : rec.message_id ? (
-                                  <span className="font-mono text-slate-400">
-                                    ID: {rec.message_id}
-                                  </span>
+                                  <div className="font-mono text-slate-500 text-[11px]">
+                                    <span className="text-slate-400">ID:</span> {rec.message_id}
+                                  </div>
                                 ) : (
-                                  'Pending dispatch'
+                                  <span className="text-slate-400 italic">
+                                    {(rec.status as string) === 'sending' ||
+                                    (rec.status as string) === 'processing'
+                                      ? 'Dispatching via Meta API...'
+                                      : 'Pending dispatch'}
+                                  </span>
                                 )}
                               </td>
                             </tr>
@@ -808,7 +1022,13 @@ export default function WhatsAppCampaignsList() {
               <button
                 type="button"
                 onClick={() => {
-                  const target = campaigns.find((c) => (c._id || c.id) === selectedCampaignId) || campaignDetail;
+                  const target =
+                    campaigns.find(
+                      (c) =>
+                        c.id === selectedCampaignId ||
+                        c._id === selectedCampaignId ||
+                        (campaignDetail && (c.id === campaignDetail.id || c._id === campaignDetail._id))
+                    ) || campaignDetail;
                   if (target) setCampaignToDelete(target);
                 }}
                 className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-rose-200 text-rose-600 hover:bg-rose-50 font-semibold text-xs transition-colors"
@@ -865,7 +1085,7 @@ export default function WhatsAppCampaignsList() {
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-slate-500">Status:</span>
-                <span>{getStatusBadge(campaignToDelete.status)}</span>
+                <span>{getCampaignStatusBadge(campaignToDelete.status)}</span>
               </div>
             </div>
 
