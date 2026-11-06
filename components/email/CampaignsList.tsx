@@ -704,8 +704,14 @@ export default function CampaignsList() {
                         </div>
                       </td>
                       <td className="py-4 px-4">{getStatusBadge(camp.status)}</td>
-                      <td className="py-4 px-4 text-slate-500 text-[11px]">
-                        {new Date(camp.created_at).toLocaleDateString()}
+                      <td className="py-4 px-4 text-slate-500 text-[11px] whitespace-nowrap">
+                        {camp.created_at || (camp as any).createdAt
+                          ? new Date(camp.created_at || (camp as any).createdAt).toLocaleDateString(undefined, {
+                              year: 'numeric',
+                              month: 'short',
+                              day: 'numeric',
+                            })
+                          : '—'}
                       </td>
                       <td className="py-4 px-5 text-right whitespace-nowrap">
                         <div className="flex items-center justify-end gap-1.5">
@@ -879,11 +885,19 @@ export default function CampaignsList() {
                         </span>
                       </div>
                     )}
-                    {campaignDetail.created_at && (
+                    {(campaignDetail.created_at || (campaignDetail as any).createdAt) && (
                       <div>
                         <span className="font-semibold text-slate-500">Created: </span>
                         <span className="text-slate-700">
-                          {new Date(campaignDetail.created_at).toLocaleString()}
+                          {new Date(
+                            campaignDetail.created_at || (campaignDetail as any).createdAt
+                          ).toLocaleString(undefined, {
+                            year: 'numeric',
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
                         </span>
                       </div>
                     )}

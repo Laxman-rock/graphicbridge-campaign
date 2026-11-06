@@ -508,6 +508,13 @@ export async function listWhatsAppCampaigns(
       campaigns = raw.data;
     }
 
+    // Normalize date and ID fields across diverse backend schemas
+    campaigns = campaigns.map((c: any) => ({
+      ...c,
+      created_at: c.created_at || c.createdAt || c.updated_at || c.updatedAt || undefined,
+      createdAt: c.createdAt || c.created_at || undefined,
+    }));
+
     return {
       success: raw?.success ?? true,
       data: campaigns,
@@ -553,11 +560,27 @@ export async function getWhatsAppCampaign(
     }
 
     const raw = res.data;
-    const campaignData: WhatsAppCampaignDetail =
+    let campaignData: WhatsAppCampaignDetail | undefined =
       raw?.data ||
       raw?.campaign ||
       raw?.result ||
       (raw?._id || raw?.id ? raw : undefined);
+
+    if (campaignData) {
+      campaignData = {
+        ...campaignData,
+        created_at:
+          campaignData.created_at ||
+          (campaignData as any).createdAt ||
+          campaignData.updated_at ||
+          (campaignData as any).updatedAt ||
+          undefined,
+        createdAt:
+          (campaignData as any).createdAt ||
+          campaignData.created_at ||
+          undefined,
+      };
+    }
 
     if (raw && raw.success === false) {
       return {

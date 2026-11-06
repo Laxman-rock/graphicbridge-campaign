@@ -162,7 +162,10 @@ export interface WhatsAppCampaignSummary {
   sent_count: number;
   failed_count: number;
   status: WhatsAppCampaignStatus;
-  created_at: string;
+  created_at?: string;
+  createdAt?: string;
+  updated_at?: string;
+  updatedAt?: string;
   started_at?: string | null;
   completed_at?: string | null;
 }

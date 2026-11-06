@@ -1,5 +1,5 @@
 import axios, { AxiosError } from 'axios';
-import { LoginCredentials, LoginResponse, User, UserListParams, UserListResponse } from '@/types/auth';
+import { LoginCredentials, LoginResponse } from '@/types/auth';
 import { getAuthToken, clearAuthSession } from './auth';
 
 const RAW_BASE_URL =
@@ -122,78 +122,5 @@ export async function loginUser(credentials: LoginCredentials): Promise<LoginRes
   }
 }
 
-/**
- * Fetch users / employees list with support for employee_category filtering.
- * Supported endpoints: GET /api/users (fallback: GET /users)
- * Query parameters: status, employee_category (single or comma-separated e.g. "IT,Production"), search, page, limit.
- */
-export async function listUsers(params?: UserListParams): Promise<UserListResponse> {
-  try {
-    const queryParams: Record<string, any> = {};
-    if (params) {
-      if (params.status) queryParams.status = params.status;
-      // Canonical employee_category parameter with fallback to aliases
-      if (params.employee_category) {
-        queryParams.employee_category = params.employee_category;
-      } else if (params.employeeCategory) {
-        queryParams.employee_category = params.employeeCategory;
-      } else if (params.category) {
-        queryParams.employee_category = params.category;
-      }
-      if (params.search) queryParams.search = params.search;
-      if (params.page) queryParams.page = params.page;
-      if (params.limit) queryParams.limit = params.limit;
-    }
-
-    let res;
-    try {
-      res = await apiClient.get<any>('/api/users', { params: queryParams });
-    } catch (err: any) {
-      if (err?.response?.status === 404) {
-        res = await apiClient.get<any>('/users', { params: queryParams });
-      } else {
-        throw err;
-      }
-    }
-
-    const raw = res.data;
-    let usersList: User[] = [];
-    if (Array.isArray(raw)) {
-      usersList = raw;
-    } else if (raw && Array.isArray(raw.data)) {
-      usersList = raw.data;
-    } else if (raw && Array.isArray(raw.users)) {
-      usersList = raw.users;
-    } else if (raw && raw.data && Array.isArray(raw.data.users)) {
-      usersList = raw.data.users;
-    }
-
-    // Safely map and preserve employee_category from backend fields
-    usersList = usersList.map((u: any) => ({
-      ...u,
-      employee_category: u.employee_category ?? u.employeeCategory ?? u.category ?? null,
-    }));
-
-    return {
-      success: raw?.success ?? true,
-      data: usersList,
-      pagination: raw?.pagination || raw?.meta,
-    };
-  } catch (err: unknown) {
-    const axiosErr = err as AxiosError<any>;
-    const errorData = axiosErr.response?.data;
-    const msg =
-      (typeof errorData === 'string' && errorData) ||
-      errorData?.error ||
-      errorData?.message ||
-      axiosErr.message ||
-      'Failed to load users list.';
-    return {
-      success: false,
-      error: msg,
-      data: [],
-    };
-  }
-}
 
 

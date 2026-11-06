@@ -12,7 +12,6 @@ import {
   Send,
   X,
   User as UserIcon,
-  Users,
 } from 'lucide-react';
 import { clearAuthSession, getStoredUser } from '@/lib/auth';
 import { useToast } from '@/components/ui/Toast';
@@ -55,13 +54,6 @@ export default function Sidebar({ isOpen, onClose, onOpenSettings }: SidebarProp
       icon: MessageSquare,
       active: pathname.startsWith('/dashboard/whatsapp'),
       accent: 'text-emerald-600 bg-emerald-50',
-    },
-    {
-      label: 'User Management',
-      href: '/dashboard/users',
-      icon: Users,
-      active: pathname.startsWith('/dashboard/users'),
-      accent: 'text-violet-600 bg-violet-50',
     },
   ];
 

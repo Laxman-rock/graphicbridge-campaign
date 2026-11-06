@@ -36,6 +36,39 @@ import {
 } from '@/lib/whatsapp-api';
 import { useToast } from '@/components/ui/Toast';
 
+// Helper to safely format dates (supports created_at, createdAt, timestamps, and ISO strings)
+export function formatDisplayDate(dateVal?: string | number | Date | null): string {
+  if (!dateVal) return '—';
+  try {
+    const d = new Date(dateVal);
+    if (isNaN(d.getTime())) return '—';
+    return d.toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
+  } catch {
+    return '—';
+  }
+}
+
+export function formatDisplayDateTime(dateVal?: string | number | Date | null): string {
+  if (!dateVal) return '—';
+  try {
+    const d = new Date(dateVal);
+    if (isNaN(d.getTime())) return '—';
+    return d.toLocaleString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return '—';
+  }
+}
+
 // Helper to format campaign name to show only the first 3 words (e.g. coimbatore_corporate_marketing)
 export function formatCampaignDisplayName(name?: string): string {
   if (!name || typeof name !== 'string') return '';
@@ -664,8 +697,11 @@ export default function WhatsAppCampaignsList() {
                         </div>
                       </td>
                       <td className="py-4 px-4">{getCampaignStatusBadge(displayStatus)}</td>
-                      <td className="py-4 px-4 text-slate-500 text-[11px]">
-                        {new Date(camp.created_at).toLocaleDateString()}
+                      <td
+                        className="py-4 px-4 text-slate-500 text-[11px] whitespace-nowrap"
+                        title={formatDisplayDateTime(camp.created_at || (camp as any).createdAt)}
+                      >
+                        {formatDisplayDate(camp.created_at || (camp as any).createdAt)}
                       </td>
                       <td className="py-4 px-5 text-right whitespace-nowrap">
                         <div className="flex items-center justify-end gap-1.5">
@@ -744,10 +780,23 @@ export default function WhatsAppCampaignsList() {
                   <h3 className="text-base font-bold text-slate-900 break-words">
                     {campaignDetail?.campaign_name || 'Campaign Details'}
                   </h3>
-                  <p className="text-xs text-slate-500">
-                    ID: {campaignDetail?.id ?? campaignDetail?._id ?? selectedCampaignId} • Mode:{' '}
-                    <span className="capitalize font-medium">{campaignDetail?.mode || '...'}</span>
-                  </p>
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-500 mt-0.5">
+                    <span>
+                      ID: <span className="font-mono">{campaignDetail?.id ?? campaignDetail?._id ?? selectedCampaignId}</span>
+                    </span>
+                    <span>•</span>
+                    <span>
+                      Mode: <span className="capitalize font-medium">{campaignDetail?.mode || '...'}</span>
+                    </span>
+                    {(campaignDetail?.created_at || (campaignDetail as any)?.createdAt) && (
+                      <>
+                        <span>•</span>
+                        <span>
+                          Date: <strong className="text-slate-700 font-semibold">{formatDisplayDateTime(campaignDetail?.created_at || (campaignDetail as any)?.createdAt)}</strong>
+                        </span>
+                      </>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -942,6 +991,15 @@ export default function WhatsAppCampaignsList() {
                           <span className="font-semibold text-slate-700">Meta Template: </span>
                           <span className="font-mono text-emerald-700 font-bold">
                             {campaignDetail.template_name}
+                          </span>
+                        </div>
+                      )}
+
+                      {(campaignDetail.created_at || (campaignDetail as any).createdAt) && (
+                        <div className="text-[11px] text-slate-600">
+                          <span className="font-semibold text-slate-700">Created At: </span>
+                          <span className="font-medium text-slate-800">
+                            {formatDisplayDateTime(campaignDetail.created_at || (campaignDetail as any).createdAt)}
                           </span>
                         </div>
                       )}
