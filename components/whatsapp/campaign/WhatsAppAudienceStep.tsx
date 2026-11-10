@@ -102,6 +102,71 @@ export default function WhatsAppAudienceStep({
     return unifiedRecipients.filter((r) => r.source === 'manual');
   }, [unifiedRecipients]);
 
+  // Derived headers from contacts or manual entries when no CSV is present
+  const contactsHeaders = useMemo(() => {
+    if (importResult?.headers && importResult.headers.length > 0) {
+      return importResult.headers;
+    }
+    const headerSet = new Set<string>();
+    headerSet.add('whatsapp_number');
+    headerSet.add('phone');
+    unifiedRecipients.forEach((r) => {
+      if (r.name) headerSet.add('name');
+      if (r.contact_id) headerSet.add('contact_id');
+      if (r.raw) {
+        Object.keys(r.raw).forEach((k) => headerSet.add(k));
+      }
+    });
+    return Array.from(headerSet);
+  }, [importResult, unifiedRecipients]);
+
+  // Virtual rawRows derived from imported contacts or manual entries when no CSV is present
+  const contactsRawRows = useMemo(() => {
+    if (importResult?.rawRows && importResult.rawRows.length > 0) {
+      return importResult.rawRows;
+    }
+    return unifiedRecipients.map((r) => {
+      const row: Record<string, string> = {
+        whatsapp_number: r.formattedPhone || r.phone,
+        phone: r.phone || r.formattedPhone || '',
+        ...(r.name ? { name: r.name } : {}),
+        ...(r.contact_id ? { contact_id: String(r.contact_id) } : {}),
+        ...(r.raw || {}),
+      };
+      return row;
+    });
+  }, [importResult, unifiedRecipients]);
+
+  const [contactsSelectedTargetCol, setContactsSelectedTargetCol] = useState<string>('whatsapp_number');
+  const [contactsSelectedNameCol, setContactsSelectedNameCol] = useState<string | null>(null);
+
+  const handleContactsNameColChange = (nameCol: string | null) => {
+    setContactsSelectedNameCol(nameCol);
+    if (!nameCol) {
+      // Revert to original contact names preserved in raw
+      const updated = unifiedRecipients.map((r) => {
+        const orig = r.raw?.original_name || r.raw?.name;
+        return {
+          ...r,
+          name: orig || r.name,
+        };
+      });
+      onRecipientsChange(updated);
+    } else {
+      // Map specified column to recipient name
+      const updated = unifiedRecipients.map((r) => {
+        if (r.raw && r.raw[nameCol]) {
+          return {
+            ...r,
+            name: String(r.raw[nameCol]),
+          };
+        }
+        return r;
+      });
+      onRecipientsChange(updated);
+    }
+  };
+
   // Handle CSV file upload
   const handleProcessCsvFile = async (file: File) => {
     setGeneralError(null);
@@ -247,6 +312,8 @@ export default function WhatsAppAudienceStep({
   const handleClearAll = () => {
     onRecipientsChange([]);
     onImportResultChange(null);
+    setContactsSelectedNameCol(null);
+    setContactsSelectedTargetCol('whatsapp_number');
     setShowClearConfirm(false);
     toastInfo('Audience list has been cleared.', 'Audience Cleared');
   };
@@ -503,38 +570,60 @@ export default function WhatsAppAudienceStep({
             </div>
           </div>
 
-          {/* If CSV was imported, display Column Selector */}
-          {importResult && (
+          {/* Column Selector / Mapping Card (Always visible when recipients exist) */}
+          {unifiedRecipients.length > 0 && (
             <div className="space-y-4">
-              <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between text-xs">
-                <div className="flex items-center gap-2">
-                  <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
-                  <span className="font-bold text-slate-800">{importResult.fileName}</span>
-                  <span className="text-slate-400">&bull;</span>
-                  <span className="text-slate-500 font-mono">
-                    {formatFileSize(importResult.fileSizeBytes)}
-                  </span>
+              {/* CSV File Info Banner (Only when a CSV file was actually uploaded) */}
+              {importResult && (
+                <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-2">
+                    <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+                    <span className="font-bold text-slate-800">{importResult.fileName}</span>
+                    <span className="text-slate-400">&bull;</span>
+                    <span className="text-slate-500 font-mono">
+                      {formatFileSize(importResult.fileSizeBytes)}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="text-xs font-semibold text-emerald-700 hover:underline"
+                  >
+                    Replace CSV File
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="text-xs font-semibold text-emerald-700 hover:underline"
-                >
-                  Replace CSV File
-                </button>
-              </div>
+              )}
 
               <ColumnSelector
-                headers={importResult.headers}
-                rawRows={importResult.rawRows}
+                headers={importResult ? importResult.headers : contactsHeaders}
+                rawRows={importResult ? importResult.rawRows : contactsRawRows}
                 campaignType="whatsapp"
-                selectedTargetCol={importResult.selectedTargetCol || null}
-                selectedNameCol={importResult.selectedNameCol || null}
-                onTargetColChange={handleTargetColChange}
-                onNameColChange={handleNameColChange}
-                fileName={importResult.fileName}
-                totalRows={importResult.summary.totalRows}
-                detectedCol={importResult.summary.columnDetected}
+                selectedTargetCol={
+                  importResult
+                    ? importResult.selectedTargetCol || null
+                    : contactsSelectedTargetCol
+                }
+                selectedNameCol={
+                  importResult
+                    ? importResult.selectedNameCol || null
+                    : contactsSelectedNameCol
+                }
+                onTargetColChange={
+                  importResult
+                    ? handleTargetColChange
+                    : (col) => setContactsSelectedTargetCol(col || 'whatsapp_number')
+                }
+                onNameColChange={
+                  importResult ? handleNameColChange : handleContactsNameColChange
+                }
+                fileName={importResult?.fileName}
+                totalRows={
+                  importResult ? importResult.summary.totalRows : unifiedRecipients.length
+                }
+                detectedCol={
+                  importResult?.summary.columnDetected || contactsSelectedTargetCol
+                }
+                isCsvUploaded={Boolean(importResult)}
               />
             </div>
           )}

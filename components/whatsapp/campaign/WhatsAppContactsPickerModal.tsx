@@ -256,9 +256,9 @@ export default function WhatsAppContactsPickerModal({
 
       const rawVars: Record<string, string> = {
         phone: normalized,
-        whatsapp_number: normalized,
+        whatsapp_number: contact.whatsapp_number || normalized,
         contact_id: String(contact.contact_id ?? ''),
-        ...(name ? { name, customer_name: name } : {}),
+        ...(name ? { name, customer_name: name, original_name: name } : {}),
       };
 
       if (contact.custom_variables && typeof contact.custom_variables === 'object') {

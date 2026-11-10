@@ -18,6 +18,7 @@ interface ColumnSelectorProps {
   fileName?: string;
   totalRows?: number;
   detectedCol?: string | null;
+  isCsvUploaded?: boolean;
 }
 
 export default function ColumnSelector({
@@ -33,10 +34,16 @@ export default function ColumnSelector({
   fileName,
   totalRows,
   detectedCol,
+  isCsvUploaded,
 }: ColumnSelectorProps) {
   const isEmail = campaignType === 'email';
   const targetCol = selectedTargetCol !== undefined ? selectedTargetCol : selectedEmailCol || null;
   const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
+
+  const showPreview =
+    isCsvUploaded !== undefined
+      ? isCsvUploaded && rawRows.length > 0
+      : rawRows.length > 0 && Boolean(fileName);
 
   const handleColChange = (val: string | null) => {
     if (onTargetColChange) onTargetColChange(val);
@@ -74,7 +81,7 @@ export default function ColumnSelector({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {rawRows.length > 0 && (
+          {showPreview && (
             <button
               type="button"
               onClick={() => setIsPreviewModalOpen(true)}
