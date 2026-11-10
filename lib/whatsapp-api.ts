@@ -15,6 +15,17 @@ import {
   GetWhatsAppCampaignResponse,
   RetryWhatsAppCampaignResponse,
   WhatsAppQueueStatusResponse,
+  WhatsAppContactItem,
+  WhatsAppContactListParams,
+  WhatsAppContactListResponse,
+  WhatsAppContactDetailResponse,
+  CreateWhatsAppContactRequest,
+  UpdateWhatsAppContactRequest,
+  ValidatePhoneResponse,
+  BulkImportContactsRequest,
+  BulkImportContactsResponse,
+  RecipientEligibilityResponse,
+  ConversationWindowResponse,
 } from '@/types/whatsapp';
 
 export function extractErrorMessage(err: unknown, defaultMsg: string): string {
@@ -709,6 +720,677 @@ export async function deleteWhatsAppCampaign(
     };
   }
 }
+
+// ==========================================
+// 4. WhatsApp Contacts Management APIs
+// ==========================================
+
+/**
+ * Normalizes a phone number string:
+ * - Removes spaces, dashes, parentheses
+ * - Automatically prepends +91 for standard Indian 10-digit mobile numbers
+ * - Ensures leading '+' for international numbers
+ */
+export function normalizePhoneNumber(phone: string): string {
+  if (!phone) return '';
+  const trimmed = phone.trim();
+  // Strip common punctuation / spacing
+  let cleaned = trimmed.replace(/[\s\-\(\)\.]/g, '');
+  if (!cleaned) return '';
+
+  // Standard Indian 10-digit mobile (starts with 6-9 or any 10 digits)
+  if (/^\d{10}$/.test(cleaned)) {
+    return `+91${cleaned}`;
+  }
+
+  // 12-digit Indian number starting with 91 but lacking +
+  if (/^91\d{10}$/.test(cleaned)) {
+    return `+${cleaned}`;
+  }
+
+  // If number starts with 00 (e.g. 0091...), replace with +
+  if (cleaned.startsWith('00')) {
+    cleaned = `+${cleaned.slice(2)}`;
+  } else if (!cleaned.startsWith('+') && cleaned.length >= 11) {
+    cleaned = `+${cleaned}`;
+  }
+
+  return cleaned;
+}
+
+/**
+ * Fetch contacts list with filters and pagination
+ * GET /api/whatsapp/contacts
+ */
+export async function listWhatsAppContacts(
+  params: WhatsAppContactListParams = {}
+): Promise<WhatsAppContactListResponse> {
+  const queryParams: Record<string, any> = {};
+  if (params.page !== undefined) queryParams.page = params.page;
+  if (params.limit !== undefined) queryParams.limit = params.limit;
+  if (params.phone_number?.trim()) {
+    queryParams.phone_number = params.phone_number.trim();
+  }
+  if (params.search?.trim()) {
+    queryParams.search = params.search.trim();
+    if (!queryParams.phone_number) {
+      queryParams.phone_number = params.search.trim();
+    }
+  }
+  if (params.opt_in_status && params.opt_in_status !== 'all') {
+    queryParams.opt_in_status = params.opt_in_status;
+  }
+  if (params.tag?.trim()) {
+    queryParams.tag = params.tag.trim();
+  }
+  if (params.group?.trim()) {
+    queryParams.group = params.group.trim();
+  }
+  if (params.is_active !== undefined && params.is_active !== 'all') {
+    queryParams.is_active = params.is_active;
+  }
+
+  const tryGetContacts = async (url: string) => {
+    return await apiClient.get<any>(url, { params: queryParams });
+  };
+
+  try {
+    let res;
+    try {
+      res = await tryGetContacts('/api/whatsapp/contacts');
+    } catch (err: any) {
+      if (err?.response?.status === 404) {
+        res = await tryGetContacts('/whatsapp/contacts');
+      } else {
+        throw err;
+      }
+    }
+
+    const raw = res.data;
+    let contactsList: WhatsAppContactItem[] = [];
+
+    if (Array.isArray(raw)) {
+      contactsList = raw;
+    } else if (raw && Array.isArray(raw.data)) {
+      contactsList = raw.data;
+    } else if (raw && Array.isArray(raw.contacts)) {
+      contactsList = raw.contacts;
+    } else if (raw && raw.success === false) {
+      return {
+        success: false,
+        error: raw.error || raw.message || 'Failed to fetch WhatsApp contacts.',
+        data: [],
+        pagination: {
+          page: params.page || 1,
+          limit: params.limit || 10,
+          total: 0,
+          pages: 1,
+        },
+      };
+    }
+
+    // Extract pagination metadata reliably
+    const reqPage = Math.max(1, Number(params.page || 1));
+    const reqLimit = Math.max(1, Number(params.limit || 10));
+
+    const backendPagination = raw?.pagination || {};
+    const totalCount = Number(
+      backendPagination.total ??
+      backendPagination.totalCount ??
+      backendPagination.count ??
+      raw?.total ??
+      raw?.totalCount ??
+      raw?.count ??
+      (Array.isArray(contactsList) ? contactsList.length : 0)
+    );
+
+    const limitVal = Math.max(
+      1,
+      Number(
+        backendPagination.limit ??
+        backendPagination.perPage ??
+        raw?.limit ??
+        reqLimit
+      )
+    );
+
+    const pageVal = Math.max(
+      1,
+      Number(
+        backendPagination.page ??
+        backendPagination.currentPage ??
+        raw?.page ??
+        reqPage
+      )
+    );
+
+    const calculatedPages = limitVal > 0 ? Math.ceil(totalCount / limitVal) : 1;
+    const pagesVal = Number(
+      backendPagination.pages ??
+      backendPagination.totalPages ??
+      backendPagination.total_pages ??
+      raw?.pages ??
+      raw?.totalPages ??
+      calculatedPages
+    );
+
+    // If backend returned more items than the requested limit (e.g. unpaginated array from backend),
+    // provide client-side slicing fallback so pagination always works!
+    if (contactsList.length > limitVal) {
+      const startIndex = (pageVal - 1) * limitVal;
+      contactsList = contactsList.slice(startIndex, startIndex + limitVal);
+    }
+
+    const paginationData = {
+      page: pageVal,
+      limit: limitVal,
+      total: Math.max(0, totalCount),
+      pages: Math.max(1, pagesVal),
+    };
+
+    return {
+      success: true,
+      data: contactsList,
+      contacts: contactsList,
+      pagination: paginationData,
+      total: paginationData.total,
+    };
+  } catch (err) {
+    return {
+      success: false,
+      error: extractErrorMessage(err, 'Failed to fetch WhatsApp contacts list.'),
+      data: [],
+      pagination: {
+        page: params.page || 1,
+        limit: params.limit || 10,
+        total: 0,
+        pages: 1,
+      },
+    };
+  }
+}
+
+/**
+ * Get detailed contact information
+ * GET /api/whatsapp/contacts/:id
+ */
+export async function getWhatsAppContact(
+  id: string | number
+): Promise<WhatsAppContactDetailResponse> {
+  const tryGet = async (targetId: string | number) => {
+    try {
+      return await apiClient.get<any>(`/api/whatsapp/contacts/${targetId}`);
+    } catch (err: any) {
+      if (err?.response?.status === 404) {
+        return await apiClient.get<any>(`/whatsapp/contacts/${targetId}`);
+      }
+      throw err;
+    }
+  };
+
+  try {
+    const res = await tryGet(id);
+    const raw = res.data;
+    const contact = raw?.data || raw?.contact || (raw?.whatsapp_number ? raw : undefined);
+
+    if (raw && raw.success === false) {
+      return {
+        success: false,
+        error: raw.error || raw.message || 'Contact not found.',
+      };
+    }
+
+    return {
+      success: true,
+      data: contact,
+      contact,
+      message: raw?.message,
+    };
+  } catch (err) {
+    return {
+      success: false,
+      error: extractErrorMessage(err, 'Failed to fetch contact details.'),
+    };
+  }
+}
+
+/**
+ * Validate phone number with backend
+ * POST /api/whatsapp/contacts/validate-phone
+ */
+export async function validateWhatsAppPhone(
+  phoneNumber: string
+): Promise<ValidatePhoneResponse> {
+  const trimmed = phoneNumber.trim();
+  if (!trimmed) {
+    return {
+      valid: false,
+      error: 'Phone number cannot be empty.',
+    };
+  }
+
+  const tryValidate = async () => {
+    try {
+      return await apiClient.post<any>('/api/whatsapp/contacts/validate-phone', {
+        phone_number: trimmed,
+      });
+    } catch (err: any) {
+      if (err?.response?.status === 404) {
+        return await apiClient.post<any>('/whatsapp/contacts/validate-phone', {
+          phone_number: trimmed,
+        });
+      }
+      throw err;
+    }
+  };
+
+  try {
+    const res = await tryValidate();
+    const raw = res.data;
+    const info = raw?.data || raw;
+
+    const valid = info?.valid === true;
+    const normalized = info?.normalized || normalizePhoneNumber(trimmed);
+
+    return {
+      success: true,
+      valid,
+      normalized,
+      message: info?.message || (valid ? 'Phone number is valid' : 'Invalid phone number format'),
+      error: valid ? undefined : info?.error || info?.message || 'Phone number format is invalid',
+    };
+  } catch (err: any) {
+    // If backend endpoint is unavailable or returns 400, perform local E.164 normalization check as graceful fallback
+    const normalized = normalizePhoneNumber(trimmed);
+    const isValidE164 = /^\+[1-9]\d{6,14}$/.test(normalized);
+
+    if (isValidE164) {
+      return {
+        success: true,
+        valid: true,
+        normalized,
+      };
+    }
+
+    return {
+      success: false,
+      valid: false,
+      normalized,
+      error: extractErrorMessage(err, 'Invalid phone number format. Must be a valid E.164 number.'),
+    };
+  }
+}
+
+/**
+ * Create a new WhatsApp contact
+ * POST /api/whatsapp/contacts
+ */
+export async function createWhatsAppContact(
+  payload: CreateWhatsAppContactRequest
+): Promise<{ success: boolean; data?: WhatsAppContactItem; message?: string; error?: string; status?: number }> {
+  // Normalize phone number
+  const normalizedNumber = normalizePhoneNumber(payload.whatsapp_number);
+  const body = {
+    ...payload,
+    whatsapp_number: normalizedNumber,
+  };
+
+  const tryCreate = async () => {
+    try {
+      return await apiClient.post<any>('/api/whatsapp/contacts', body);
+    } catch (err: any) {
+      if (err?.response?.status === 404) {
+        return await apiClient.post<any>('/whatsapp/contacts', body);
+      }
+      throw err;
+    }
+  };
+
+  try {
+    const res = await tryCreate();
+    const raw = res.data;
+    return {
+      success: raw?.success ?? true,
+      data: raw?.data || raw?.contact,
+      message: raw?.message || 'WhatsApp contact created successfully!',
+      status: res.status,
+    };
+  } catch (err: any) {
+    const status = err?.response?.status;
+    let errorMsg = extractErrorMessage(err, 'Failed to create WhatsApp contact.');
+    if (status === 409) {
+      errorMsg =
+        err.response?.data?.error ||
+        err.response?.data?.message ||
+        'Conflict: A contact with this WhatsApp number or Contact ID already exists.';
+    } else if (status === 403) {
+      errorMsg = 'Permission denied: whatsapp.contacts.create is required to add contacts.';
+    }
+
+    return {
+      success: false,
+      error: errorMsg,
+      status,
+    };
+  }
+}
+
+/**
+ * Update existing WhatsApp contact
+ * PUT /api/whatsapp/contacts/:id
+ */
+export async function updateWhatsAppContact(
+  id: string | number,
+  payload: UpdateWhatsAppContactRequest
+): Promise<{ success: boolean; data?: WhatsAppContactItem; message?: string; error?: string; status?: number }> {
+  const body = {
+    ...payload,
+    ...(payload.whatsapp_number
+      ? { whatsapp_number: normalizePhoneNumber(payload.whatsapp_number) }
+      : {}),
+  };
+
+  const tryUpdate = async (targetId: string | number) => {
+    try {
+      return await apiClient.put<any>(`/api/whatsapp/contacts/${targetId}`, body);
+    } catch (err: any) {
+      if (err?.response?.status === 404) {
+        return await apiClient.put<any>(`/whatsapp/contacts/${targetId}`, body);
+      }
+      throw err;
+    }
+  };
+
+  try {
+    const res = await tryUpdate(id);
+    const raw = res.data;
+    return {
+      success: raw?.success ?? true,
+      data: raw?.data || raw?.contact,
+      message: raw?.message || 'WhatsApp contact updated successfully!',
+      status: res.status,
+    };
+  } catch (err: any) {
+    const status = err?.response?.status;
+    let errorMsg = extractErrorMessage(err, 'Failed to update contact.');
+    if (status === 409) {
+      errorMsg =
+        err.response?.data?.error ||
+        err.response?.data?.message ||
+        'Conflict: Another contact is already registered with this phone number or ID.';
+    } else if (status === 403) {
+      errorMsg = 'Permission denied: whatsapp.contacts.edit is required to edit contacts.';
+    }
+
+    return {
+      success: false,
+      error: errorMsg,
+      status,
+    };
+  }
+}
+
+/**
+ * Opt-In a WhatsApp contact
+ * POST /api/whatsapp/contacts/:id/opt-in
+ */
+export async function optInWhatsAppContact(
+  id: string | number,
+  method: string = 'manual'
+): Promise<{ success: boolean; data?: WhatsAppContactItem; message?: string; error?: string }> {
+  const tryOptIn = async (targetId: string | number) => {
+    try {
+      return await apiClient.post<any>(`/api/whatsapp/contacts/${targetId}/opt-in`, {
+        method,
+      });
+    } catch (err: any) {
+      if (err?.response?.status === 404) {
+        return await apiClient.post<any>(`/whatsapp/contacts/${targetId}/opt-in`, {
+          method,
+        });
+      }
+      throw err;
+    }
+  };
+
+  try {
+    const res = await tryOptIn(id);
+    const raw = res.data;
+    return {
+      success: raw?.success ?? true,
+      data: raw?.data || raw?.contact,
+      message: raw?.message || 'Contact consent successfully updated to Opted In.',
+    };
+  } catch (err) {
+    return {
+      success: false,
+      error: extractErrorMessage(err, 'Failed to update opt-in status.'),
+    };
+  }
+}
+
+/**
+ * Opt-Out a WhatsApp contact
+ * POST /api/whatsapp/contacts/:id/opt-out
+ */
+export async function optOutWhatsAppContact(
+  id: string | number,
+  reason?: string
+): Promise<{ success: boolean; data?: WhatsAppContactItem; message?: string; error?: string }> {
+  const tryOptOut = async (targetId: string | number) => {
+    try {
+      return await apiClient.post<any>(`/api/whatsapp/contacts/${targetId}/opt-out`, {
+        ...(reason ? { reason } : {}),
+      });
+    } catch (err: any) {
+      if (err?.response?.status === 404) {
+        return await apiClient.post<any>(`/whatsapp/contacts/${targetId}/opt-out`, {
+          ...(reason ? { reason } : {}),
+        });
+      }
+      throw err;
+    }
+  };
+
+  try {
+    const res = await tryOptOut(id);
+    const raw = res.data;
+    return {
+      success: raw?.success ?? true,
+      data: raw?.data || raw?.contact,
+      message: raw?.message || 'Contact has been opted out.',
+    };
+  } catch (err) {
+    return {
+      success: false,
+      error: extractErrorMessage(err, 'Failed to update opt-out status.'),
+    };
+  }
+}
+
+/**
+ * Soft Delete a WhatsApp contact
+ * DELETE /api/whatsapp/contacts/:id
+ */
+export async function deleteWhatsAppContact(
+  id: string | number
+): Promise<{ success: boolean; message?: string; error?: string }> {
+  const tryDelete = async (targetId: string | number) => {
+    try {
+      return await apiClient.delete<any>(`/api/whatsapp/contacts/${targetId}`);
+    } catch (err: any) {
+      if (err?.response?.status === 404) {
+        return await apiClient.delete<any>(`/whatsapp/contacts/${targetId}`);
+      }
+      throw err;
+    }
+  };
+
+  try {
+    const res = await tryDelete(id);
+    const raw = res.data;
+    return {
+      success: raw?.success ?? true,
+      message: raw?.message || 'Contact removed successfully.',
+    };
+  } catch (err: any) {
+    if (err?.response?.status === 403) {
+      return {
+        success: false,
+        error: 'Permission denied: whatsapp.contacts.delete is required to delete contacts.',
+      };
+    }
+    return {
+      success: false,
+      error: extractErrorMessage(err, 'Failed to delete contact.'),
+    };
+  }
+}
+
+/**
+ * Bulk Import WhatsApp Contacts
+ * POST /api/whatsapp/contacts/bulk-import
+ */
+export async function bulkImportWhatsAppContacts(
+  contacts: BulkImportContactsRequest['contacts']
+): Promise<BulkImportContactsResponse> {
+  const tryBulkImport = async () => {
+    try {
+      return await apiClient.post<any>('/api/whatsapp/contacts/bulk-import', {
+        contacts,
+      });
+    } catch (err: any) {
+      if (err?.response?.status === 404) {
+        return await apiClient.post<any>('/whatsapp/contacts/bulk-import', {
+          contacts,
+        });
+      }
+      throw err;
+    }
+  };
+
+  try {
+    const res = await tryBulkImport();
+    const raw = res.data;
+    return {
+      success: raw?.success ?? true,
+      message: raw?.message || 'Bulk contacts import completed.',
+      data: raw?.data || raw,
+      imported: raw?.data?.imported ?? raw?.imported ?? raw?.data?.successful,
+      duplicates: raw?.data?.duplicates ?? raw?.duplicates,
+      errors: raw?.data?.errors ?? raw?.errors,
+    };
+  } catch (err: any) {
+    if (err?.response?.status === 403) {
+      return {
+        success: false,
+        error: 'Permission denied: whatsapp.contacts.import is required to import contacts.',
+      };
+    }
+    return {
+      success: false,
+      error: extractErrorMessage(err, 'Bulk contacts import failed.'),
+    };
+  }
+}
+
+/**
+ * Validate recipient eligibility
+ * POST /api/whatsapp/validate-recipient
+ */
+export async function validateWhatsAppRecipient(
+  phoneNumber: string
+): Promise<RecipientEligibilityResponse> {
+  const normalized = normalizePhoneNumber(phoneNumber);
+  const tryValidate = async () => {
+    try {
+      return await apiClient.post<any>('/api/whatsapp/validate-recipient', {
+        phone_number: normalized,
+      });
+    } catch (err: any) {
+      if (err?.response?.status === 404) {
+        return await apiClient.post<any>('/whatsapp/validate-recipient', {
+          phone_number: normalized,
+        });
+      }
+      throw err;
+    }
+  };
+
+  try {
+    const res = await tryValidate();
+    const raw = res.data;
+    const data = raw?.data || raw;
+
+    const isEligible = data?.is_eligible ?? data?.eligible ?? (raw?.success === true);
+    return {
+      success: true,
+      is_eligible: isEligible,
+      eligible: isEligible,
+      opt_in_status: data?.opt_in_status,
+      reason: data?.reason,
+      message: data?.message || raw?.message,
+    };
+  } catch (err) {
+    return {
+      success: false,
+      is_eligible: false,
+      eligible: false,
+      error: extractErrorMessage(err, 'Failed to check recipient eligibility.'),
+    };
+  }
+}
+
+/**
+ * Check 24-hour WhatsApp customer care conversation window
+ * POST /api/whatsapp/check-conversation-window
+ */
+export async function checkWhatsAppConversationWindow(
+  phoneNumber: string
+): Promise<ConversationWindowResponse> {
+  const normalized = normalizePhoneNumber(phoneNumber);
+  const tryCheck = async () => {
+    try {
+      return await apiClient.post<any>('/api/whatsapp/check-conversation-window', {
+        phone_number: normalized,
+      });
+    } catch (err: any) {
+      if (err?.response?.status === 404) {
+        return await apiClient.post<any>('/whatsapp/check-conversation-window', {
+          phone_number: normalized,
+        });
+      }
+      throw err;
+    }
+  };
+
+  try {
+    const res = await tryCheck();
+    const raw = res.data;
+    const data = raw?.data || raw;
+
+    const isWindowOpen = data?.is_window_open ?? data?.window_open ?? false;
+    const requiresTemplate = data?.requires_template ?? !isWindowOpen;
+
+    return {
+      success: true,
+      is_window_open: isWindowOpen,
+      window_open: isWindowOpen,
+      window_expires_at: data?.window_expires_at || data?.expires_at,
+      requires_template: requiresTemplate,
+      message: data?.message || raw?.message,
+    };
+  } catch (err) {
+    return {
+      success: false,
+      is_window_open: false,
+      window_open: false,
+      requires_template: true,
+      error: extractErrorMessage(err, 'Failed to inspect 24-hour conversation window.'),
+    };
+  }
+}
+
 
 
 

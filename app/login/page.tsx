@@ -80,6 +80,15 @@ function LoginForm() {
             name: trimmedUserId,
           };
 
+        // Attach permissions if returned in response data or root
+        const perms =
+          (response as any)?.permissions ||
+          response.data?.permissions ||
+          (userObj as any)?.permissions;
+        if (Array.isArray(perms) && !userObj.permissions) {
+          userObj.permissions = perms;
+        }
+
         saveAuthSession(token, userObj, rememberMe);
         toastSuccess('Successfully signed in. Welcome back!', 'Authentication Successful');
         router.push('/dashboard');

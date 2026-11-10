@@ -17,7 +17,6 @@ import {
   Image as ImageIcon,
   FileText,
   ShieldCheck,
-  Code,
   Info,
 } from 'lucide-react';
 import { CsvImportResult, WhatsAppContactRecord } from '@/types/campaign';
@@ -27,6 +26,7 @@ import {
   WhatsAppTemplate,
   WhatsAppRecipientObject,
   CreateWhatsAppCampaignRequest,
+  UnifiedWhatsAppRecipient,
 } from '@/types/whatsapp';
 import {
   listWhatsAppTemplates,
@@ -38,7 +38,7 @@ import {
 } from '@/lib/whatsapp-api';
 import { WHATSAPP_PRESET_TEMPLATES } from '@/lib/whatsapp-presets';
 import { useToast } from '@/components/ui/Toast';
-import CsvImporter from '@/components/campaign/CsvImporter';
+import WhatsAppAudienceStep from './campaign/WhatsAppAudienceStep';
 import ImageUploadArea from '@/components/common/ImageUploadArea';
 import WhatsAppBubblePreview from './WhatsAppBubblePreview';
 
@@ -78,8 +78,22 @@ export default function WhatsAppCampaignWizard({
   // Step state: 1 = CSV & Mobile Column, 2 = Message Setup, 3 = Review & Dispatch
   const [step, setStep] = useState<1 | 2 | 3>(1);
 
-  // Step 1: Contacts
+  // Step 1: Contacts & Unified Audience
   const [importResult, setImportResult] = useState<CsvImportResult | null>(null);
+  const [unifiedRecipients, setUnifiedRecipients] = useState<UnifiedWhatsAppRecipient[]>([]);
+
+  // Collect all available column/variable headers across CSV and recipients
+  const audienceHeaders = React.useMemo(() => {
+    const headerSet = new Set<string>(importResult?.headers || []);
+    headerSet.add('name');
+    headerSet.add('phone');
+    unifiedRecipients.forEach((r) => {
+      if (r.raw) {
+        Object.keys(r.raw).forEach((k) => headerSet.add(k));
+      }
+    });
+    return Array.from(headerSet);
+  }, [importResult, unifiedRecipients]);
 
   // Step 2: Campaign Configuration
   const [campaignName, setCampaignName] = useState('');
@@ -268,37 +282,35 @@ export default function WhatsAppCampaignWizard({
       );
 
       vars.forEach((v) => {
-        // If CSV has a column matching name, invoice, amount or v
-        if (importResult) {
-          const matchedHeader = importResult.headers.find((h) => {
-            const hLower = h.toLowerCase().replace(/[\s\-_]+/g, '');
-            const vLower = v.toLowerCase().replace(/[\s\-_]+/g, '');
-            return (
-              hLower === vLower ||
-              (v === '1' && (hLower.includes('name') || hLower.includes('customer') || hLower.includes('client'))) ||
-              (v === '2' && (hLower.includes('invoice') || hLower.includes('order') || hLower.includes('bill'))) ||
-              (v === '3' && (hLower.includes('amount') || hLower.includes('price') || hLower.includes('total') || hLower.includes('balance')))
-            );
-          });
+        // Search audienceHeaders (or importResult headers)
+        const headersToSearch = audienceHeaders.length > 0 ? audienceHeaders : (importResult?.headers || []);
+        const matchedHeader = headersToSearch.find((h) => {
+          const hLower = h.toLowerCase().replace(/[\s\-_]+/g, '');
+          const vLower = v.toLowerCase().replace(/[\s\-_]+/g, '');
+          return (
+            hLower === vLower ||
+            (v === '1' && (hLower.includes('name') || hLower.includes('customer') || hLower.includes('client'))) ||
+            (v === '2' && (hLower.includes('invoice') || hLower.includes('order') || hLower.includes('bill'))) ||
+            (v === '3' && (hLower.includes('amount') || hLower.includes('price') || hLower.includes('total') || hLower.includes('balance')))
+          );
+        });
 
-          if (matchedHeader) {
-            initialMap[v] = { type: 'column', value: matchedHeader };
-            return;
-          }
+        if (matchedHeader) {
+          initialMap[v] = { type: 'column', value: matchedHeader };
+          return;
         }
         initialMap[v] = { type: 'static', value: '' };
       });
 
       setVariableMappings(initialMap);
     }
-  }, [selectedTemplateName, selectedTemplate, importResult]);
+  }, [selectedTemplateName, selectedTemplate, importResult, audienceHeaders]);
 
   // Handle continuing from Step 1
   const handleProceedFromContacts = (result: CsvImportResult) => {
     setImportResult(result);
     if (!campaignName) {
       const baseName = result.fileName.replace(/\.csv$/i, '');
-
       setCampaignName(`${baseName} WhatsApp Campaign`);
     }
     setStep(2);
@@ -306,14 +318,15 @@ export default function WhatsAppCampaignWizard({
 
   // Helper: Build recipients payload with preserved phone strings, names and row variables
   const buildRecipientsPayload = (): WhatsAppRecipientObject[] => {
-    if (!importResult) return [];
+    if (unifiedRecipients.length === 0) return [];
 
-    const validRecords = importResult.records.filter(
+    const validRecords = unifiedRecipients.filter(
       (r) => r.status === 'valid'
-    ) as WhatsAppContactRecord[];
+    );
 
     // Exclude recipients who have explicitly opted out
     const eligibleRecords = validRecords.filter((rec) => {
+      if (rec.opt_in_status === 'opted_out') return false;
       const raw = rec.raw || {};
       const optInVal =
         raw['whatsapp_opt_in'] ??
@@ -366,7 +379,10 @@ export default function WhatsAppCampaignWizard({
       // Name column mapping or detection
       const nameVal =
         rec.name ||
-        (importResult.selectedNameCol ? rec.raw[importResult.selectedNameCol] : undefined);
+        (importResult?.selectedNameCol ? rec.raw[importResult.selectedNameCol] : undefined) ||
+        rec.raw['name'] ||
+        rec.raw['customer_name'] ||
+        rec.raw['first_name'];
 
       if (nameVal && !recipientVars.customer_name && !recipientVars['1']) {
         recipientVars['1'] = String(nameVal).trim();
@@ -409,10 +425,9 @@ export default function WhatsAppCampaignWizard({
 
   // Get sample interpolated body text for preview
   const getSampleBodyPreview = () => {
+    const firstValid = unifiedRecipients.find((r) => r.status === 'valid');
+
     if (mode === 'custom') {
-      const firstValid = importResult?.records.find((r) => r.status === 'valid') as
-        | WhatsAppContactRecord
-        | undefined;
       return customText.replace(/\{\{customer_name\}\}/g, firstValid?.name || 'Customer');
     }
 
@@ -420,9 +435,6 @@ export default function WhatsAppCampaignWizard({
     if (!bodyText) return '(Empty template body)';
 
     let text = bodyText;
-    const firstValid = importResult?.records.find((r) => r.status === 'valid') as
-      | WhatsAppContactRecord
-      | undefined;
 
     bodyVariables.forEach((varKey) => {
       const mapping = variableMappings[varKey];
@@ -451,7 +463,7 @@ export default function WhatsAppCampaignWizard({
       return;
     }
 
-    if (!importResult || importResult.summary.validCount === 0) {
+    if (unifiedRecipients.length === 0) {
       toastError('No valid contacts found for WhatsApp dispatch.', 'No Recipients');
       return;
     }
@@ -601,12 +613,16 @@ export default function WhatsAppCampaignWizard({
               className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold text-xs transition-all ${
                 step === 1
                   ? 'bg-emerald-600 text-white shadow-md shadow-emerald-500/20'
-                  : importResult
+                  : unifiedRecipients.length > 0
                   ? 'bg-emerald-100 text-emerald-700'
                   : 'bg-slate-100 text-slate-500'
               }`}
             >
-              {importResult && step > 1 ? <CheckCircle2 className="w-5 h-5" /> : '1'}
+              {unifiedRecipients.length > 0 && step > 1 ? (
+                <CheckCircle2 className="w-5 h-5" />
+              ) : (
+                '1'
+              )}
             </div>
             <div className="text-left hidden sm:block">
               <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
@@ -628,9 +644,9 @@ export default function WhatsAppCampaignWizard({
           <button
             type="button"
             onClick={() => {
-              if (importResult && importResult.summary.validCount > 0) setStep(2);
+              if (unifiedRecipients.length > 0) setStep(2);
             }}
-            disabled={!importResult || importResult.summary.validCount === 0}
+            disabled={unifiedRecipients.length === 0}
             className="flex items-center gap-3 group focus:outline-none disabled:opacity-40"
           >
             <div
@@ -664,9 +680,9 @@ export default function WhatsAppCampaignWizard({
           <button
             type="button"
             onClick={() => {
-              if (importResult && campaignName) setStep(3);
+              if (unifiedRecipients.length > 0 && campaignName) setStep(3);
             }}
-            disabled={!importResult || !campaignName}
+            disabled={unifiedRecipients.length === 0 || !campaignName}
             className="flex items-center gap-3 group focus:outline-none disabled:opacity-40"
           >
             <div
@@ -694,12 +710,25 @@ export default function WhatsAppCampaignWizard({
         </div>
       </div>
 
-      {/* STEP 1: CSV IMPORT & MOBILE NUMBER COLUMN SELECTION */}
+      {/* STEP 1: AUDIENCE SELECTION (CSV, MANUAL, CONTACTS) */}
       {step === 1 && (
-        <CsvImporter
-          campaignType="whatsapp"
-          onProceedToWorkflow={handleProceedFromContacts}
-          hideHeaderNavigation={true}
+        <WhatsAppAudienceStep
+          unifiedRecipients={unifiedRecipients}
+          onRecipientsChange={setUnifiedRecipients}
+          importResult={importResult}
+          onImportResultChange={(res) => {
+            setImportResult(res);
+            if (res && !campaignName) {
+              const baseName = res.fileName.replace(/\.csv$/i, '');
+              setCampaignName(`${baseName} WhatsApp Campaign`);
+            }
+          }}
+          onProceed={() => {
+            if (!campaignName) {
+              setCampaignName(`WhatsApp Campaign ${new Date().toLocaleDateString()}`);
+            }
+            setStep(2);
+          }}
         />
       )}
 
@@ -712,7 +741,7 @@ export default function WhatsAppCampaignWizard({
               <div>
                 <h3 className="text-base font-bold text-slate-900">WhatsApp Campaign Setup</h3>
                 <p className="text-xs text-slate-500">
-                  Targeting {importResult?.summary.validCount} verified mobile contacts (E.164 formatted)
+                  Targeting {unifiedRecipients.length} verified mobile contacts (E.164 formatted)
                 </p>
               </div>
 
@@ -1052,7 +1081,7 @@ export default function WhatsAppCampaignWizard({
                                       className="flex-1 px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs bg-white text-slate-800 focus:outline-none focus:border-emerald-500"
                                     >
                                       <option value="">-- Choose Column --</option>
-                                      {importResult?.headers.map((h) => (
+                                      {audienceHeaders.map((h) => (
                                         <option key={h} value={h}>
                                           {h}
                                         </option>
@@ -1328,7 +1357,7 @@ export default function WhatsAppCampaignWizard({
                 <div>
                   <span className="text-slate-400">Total Contacts:</span>
                   <p className="font-bold text-emerald-600">
-                    {createdResult.data?.total_recipients || importResult?.summary.validCount}
+                    {createdResult.data?.total_recipients || unifiedRecipients.length}
                   </p>
                 </div>
               </div>
@@ -1340,6 +1369,7 @@ export default function WhatsAppCampaignWizard({
                     setCreatedResult(null);
                     setStep(1);
                     setImportResult(null);
+                    setUnifiedRecipients([]);
                     setCampaignName('');
                   }}
                   className="px-5 py-2.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50"
@@ -1392,7 +1422,7 @@ export default function WhatsAppCampaignWizard({
                 <div className="p-4 rounded-2xl bg-emerald-50/60 border border-emerald-100">
                   <span className="text-emerald-700 font-medium">Verified Contacts:</span>
                   <p className="text-sm font-bold text-emerald-700 mt-1">
-                    {importResult?.summary.validCount} recipients
+                    {unifiedRecipients.length} recipients
                   </p>
                 </div>
               </div>
@@ -1402,7 +1432,7 @@ export default function WhatsAppCampaignWizard({
                 <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200/80 text-amber-900 text-xs flex items-center gap-2.5">
                   <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
                   <span>
-                    Note: <strong>{importResult.summary.invalidCount} invalid row(s)</strong> found in CSV will be skipped. Only the {importResult.summary.validCount} valid contacts will receive messages.
+                    Note: <strong>{importResult.summary.invalidCount} invalid row(s)</strong> found in CSV were skipped. The {unifiedRecipients.length} valid contacts will receive messages.
                   </span>
                 </div>
               )}
@@ -1417,11 +1447,11 @@ export default function WhatsAppCampaignWizard({
                   <span className="text-[11px] text-slate-400">First validated contact</span>
                 </div>
 
-                {importResult?.records.find((r) => r.status === 'valid') ? (
+                {unifiedRecipients.find((r) => r.status === 'valid') ? (
                   (() => {
-                    const sample = importResult.records.find(
+                    const sample = unifiedRecipients.find(
                       (r) => r.status === 'valid'
-                    ) as WhatsAppContactRecord;
+                    )!;
 
                     // Compute sample recipient vars
                     const sampleRecVars: Record<string, string> = {};
@@ -1512,49 +1542,6 @@ export default function WhatsAppCampaignWizard({
                 />
               </div>
 
-              {/* Inspectable API Request Payload JSON */}
-              <details className="p-4 rounded-2xl bg-slate-900 text-slate-100 text-xs font-mono group">
-                <summary className="font-bold cursor-pointer select-none flex items-center justify-between text-emerald-400">
-                  <div className="flex items-center gap-2">
-                    <Code className="w-4 h-4 text-emerald-400" />
-                    <span>Inspect Outgoing API Request Payload (POST /api/whatsapp/campaigns)</span>
-                  </div>
-                  <span className="text-[10px] text-slate-400 group-open:hidden">Click to inspect payload</span>
-                </summary>
-                <div className="mt-3 overflow-x-auto max-h-60 rounded-xl bg-slate-950 p-3 text-[11px] text-emerald-300">
-                  <pre>
-                    {JSON.stringify(
-                      {
-                        campaign_name: campaignName.trim(),
-                        mode: mode,
-                        message_type: mode === 'template' ? 'template' : messageType,
-                        template_id:
-                          selectedTemplate?.template_id ||
-                          selectedTemplate?._id ||
-                          selectedTemplate?.id ||
-                          selectedTemplate?.name,
-                        template_name: selectedTemplate?.name,
-                        language_code: languageCode.trim() || 'en',
-                        whatsapp_opt_in: whatsappOptIn,
-                        media_url:
-                          mode === 'template'
-                            ? (activeHeaderImageUrl || undefined)
-                            : (mediaUrl || undefined),
-                        header_image_url:
-                          mode === 'template'
-                            ? (activeHeaderImageUrl || undefined)
-                            : (mediaUrl || undefined),
-                        variables: buildGlobalVariables(),
-                        recipients: buildRecipientsPayload().slice(0, 3),
-                        total_recipients: buildRecipientsPayload().length,
-                      },
-                      null,
-                      2
-                    )}
-                  </pre>
-                </div>
-              </details>
-
               {/* Opt-In Confirmation Checkbox in Step 3 */}
               <div
                 className={`p-5 rounded-2xl border transition-all ${
@@ -1623,7 +1610,7 @@ export default function WhatsAppCampaignWizard({
                   ) : (
                     <>
                       <Send className="w-4 h-4" />
-                      <span>Queue & Dispatch WhatsApp Campaign ({importResult?.summary.validCount})</span>
+                      <span>Queue & Dispatch WhatsApp Campaign ({unifiedRecipients.length})</span>
                     </>
                   )}
                 </button>

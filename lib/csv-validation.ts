@@ -293,6 +293,8 @@ export async function parseAndValidateCsv(
           const nameCol =
             overrideNameCol !== undefined
               ? overrideNameCol
+              : campaignType === 'whatsapp'
+              ? null
               : detectColumn(rawHeaders, NAME_COLUMN_CANDIDATES);
 
           const evaluated = evaluateCsvRecords(

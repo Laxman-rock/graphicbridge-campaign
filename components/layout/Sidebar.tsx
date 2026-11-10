@@ -12,6 +12,7 @@ import {
   Send,
   X,
   User as UserIcon,
+  Users,
 } from 'lucide-react';
 import { clearAuthSession, getStoredUser } from '@/lib/auth';
 import { useToast } from '@/components/ui/Toast';
@@ -52,7 +53,14 @@ export default function Sidebar({ isOpen, onClose, onOpenSettings }: SidebarProp
       label: 'WhatsApp Campaign',
       href: '/dashboard/whatsapp',
       icon: MessageSquare,
-      active: pathname.startsWith('/dashboard/whatsapp'),
+      active: pathname === '/dashboard/whatsapp',
+      accent: 'text-emerald-600 bg-emerald-50',
+    },
+    {
+      label: 'WhatsApp Contacts',
+      href: '/dashboard/whatsapp/contacts',
+      icon: Users,
+      active: pathname.startsWith('/dashboard/whatsapp/contacts'),
       accent: 'text-emerald-600 bg-emerald-50',
     },
   ];

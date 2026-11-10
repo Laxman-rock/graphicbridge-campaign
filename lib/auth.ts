@@ -49,3 +49,21 @@ export function getAuthToken(): string | null {
   return getAuthSession()?.token || null;
 }
 
+/**
+ * Check if the currently authenticated user possesses a specific permission.
+ * If user has no explicit permissions array, defaults to true (unrestricted).
+ * Supports wildcard '*' and 'admin' role.
+ */
+export function hasPermission(permission: string): boolean {
+  const user = getStoredUser();
+  if (!user) return false;
+  if (!user.permissions || !Array.isArray(user.permissions) || user.permissions.length === 0) {
+    return true;
+  }
+  return (
+    user.permissions.includes(permission) ||
+    user.permissions.includes('*') ||
+    user.role === 'admin'
+  );
+}
+

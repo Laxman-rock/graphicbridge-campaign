@@ -232,3 +232,185 @@ export interface WhatsAppQueueStatusResponse {
   error?: string;
 }
 
+// 4. WhatsApp Contacts Management
+export interface MasterContactDetails {
+  id?: string | number;
+  contact_id?: string | number;
+  name?: string;
+  contact_name?: string;
+  first_name?: string;
+  last_name?: string;
+  email?: string;
+  phone?: string;
+  company?: string;
+  city?: string;
+  [key: string]: any;
+}
+
+export type WhatsAppOptInStatus = 'opted_in' | 'opted_out' | 'pending' | string;
+export type WhatsAppOptInMethod = 'manual' | 'api' | 'bulk_import' | 'web_form' | string;
+
+export interface WhatsAppContactItem {
+  _id?: string;
+  id: string | number;
+  contact_id: string | number;
+  whatsapp_number: string;
+  opt_in_status?: WhatsAppOptInStatus;
+  opt_in_method?: WhatsAppOptInMethod;
+  opt_in_at?: string | null;
+  opt_out_at?: string | null;
+  is_active?: boolean;
+  active?: boolean;
+  tags?: string[];
+  groups?: string[];
+  custom_variables?: Record<string, any>;
+  contact_details?: MasterContactDetails;
+  created_at?: string;
+  createdAt?: string;
+  updated_at?: string;
+  updatedAt?: string;
+}
+
+export interface WhatsAppContactListParams {
+  page?: number;
+  limit?: number;
+  phone_number?: string;
+  search?: string;
+  opt_in_status?: string;
+  tag?: string;
+  group?: string;
+  is_active?: boolean | string;
+}
+
+export interface WhatsAppContactListResponse {
+  success: boolean;
+  data?: WhatsAppContactItem[];
+  contacts?: WhatsAppContactItem[];
+  pagination?: {
+    page: number;
+    limit: number;
+    total: number;
+    pages: number;
+  };
+  total?: number;
+  message?: string;
+  error?: string;
+}
+
+export interface WhatsAppContactDetailResponse {
+  success: boolean;
+  data?: WhatsAppContactItem;
+  contact?: WhatsAppContactItem;
+  message?: string;
+  error?: string;
+}
+
+export interface CreateWhatsAppContactRequest {
+  contact_id: number | string;
+  whatsapp_number: string;
+  opt_in_method?: WhatsAppOptInMethod;
+  tags?: string[];
+  groups?: string[];
+  custom_variables?: Record<string, any>;
+}
+
+export interface UpdateWhatsAppContactRequest {
+  whatsapp_number?: string;
+  contact_id?: number | string;
+  tags?: string[];
+  groups?: string[];
+  custom_variables?: Record<string, any>;
+  is_active?: boolean;
+}
+
+export interface ValidatePhoneRequest {
+  phone_number: string;
+}
+
+export interface ValidatePhoneResponse {
+  success?: boolean;
+  valid: boolean;
+  normalized?: string;
+  message?: string;
+  error?: string;
+}
+
+export interface BulkImportContactItem {
+  contact_id: number | string;
+  whatsapp_number: string;
+  tags?: string[];
+  groups?: string[];
+  custom_variables?: Record<string, any>;
+}
+
+export interface BulkImportContactsRequest {
+  contacts: BulkImportContactItem[];
+}
+
+export interface BulkImportContactsResponse {
+  success: boolean;
+  message?: string;
+  data?: {
+    total?: number;
+    imported?: number;
+    successful?: number;
+    success_count?: number;
+    duplicates?: number;
+    duplicate_count?: number;
+    failed?: number;
+    failed_count?: number;
+    errors?: Array<{
+      row?: number;
+      contact_id?: any;
+      phone?: string;
+      whatsapp_number?: string;
+      error: string;
+    }>;
+    details?: any[];
+  };
+  imported?: number;
+  duplicates?: any[];
+  errors?: any[];
+  error?: string;
+}
+
+export interface RecipientEligibilityResponse {
+  success?: boolean;
+  is_eligible?: boolean;
+  eligible?: boolean;
+  opt_in_status?: string;
+  reason?: string;
+  message?: string;
+  error?: string;
+}
+
+export interface ConversationWindowResponse {
+  success?: boolean;
+  is_window_open?: boolean;
+  window_open?: boolean;
+  window_expires_at?: string;
+  requires_template?: boolean;
+  message?: string;
+  error?: string;
+}
+
+// 5. Unified Campaign Recipient Model
+export type WhatsAppRecipientSource = 'csv' | 'manual' | 'whatsapp_contacts';
+
+export interface UnifiedWhatsAppRecipient {
+  id: string;
+  phone: string;
+  formattedPhone?: string;
+  name?: string;
+  source: WhatsAppRecipientSource;
+  contact_id?: string | number;
+  status: 'valid' | 'invalid' | 'duplicate';
+  errorReason?: string;
+  whatsapp_opt_in: boolean;
+  opt_in_status?: string;
+  tags?: string[];
+  groups?: string[];
+  raw: Record<string, string>;
+}
+
+
