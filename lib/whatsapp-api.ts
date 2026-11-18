@@ -452,14 +452,16 @@ export async function createWhatsAppCampaign(
     try {
       res = await apiClient.post<any>(
         '/api/whatsapp/campaigns',
-        payload
+        payload,
+        { timeout: 180000 }
       );
     } catch (err: unknown) {
       const axiosErr = err as { response?: { status?: number } };
       if (axiosErr?.response?.status === 404) {
         res = await apiClient.post<any>(
           '/whatsapp/campaigns',
-          payload
+          payload,
+          { timeout: 180000 }
         );
       } else {
         throw err;
@@ -773,9 +775,6 @@ export async function listWhatsAppContacts(
   }
   if (params.search?.trim()) {
     queryParams.search = params.search.trim();
-    if (!queryParams.phone_number) {
-      queryParams.phone_number = params.search.trim();
-    }
   }
   if (params.opt_in_status && params.opt_in_status !== 'all') {
     queryParams.opt_in_status = params.opt_in_status;

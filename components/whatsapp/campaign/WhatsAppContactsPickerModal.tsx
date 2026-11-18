@@ -80,7 +80,6 @@ export default function WhatsAppContactsPickerModal({
 
         if (searchQuery.trim()) {
           params.search = searchQuery.trim();
-          params.phone_number = searchQuery.trim();
         }
         if (optInFilter !== 'all') {
           params.opt_in_status = optInFilter;
