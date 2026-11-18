@@ -107,10 +107,11 @@ export default function EmailCampaignWizard({
     try {
       const res = await listEmailTemplates();
       if (res.success && Array.isArray(res.data)) {
-        setTemplates(res.data);
+        const activeTemplates = res.data.filter((t) => t.status !== false);
+        setTemplates(activeTemplates);
         setTemplatesError(null);
-        if (res.data.length > 0) {
-          const first = res.data[0];
+        if (activeTemplates.length > 0) {
+          const first = activeTemplates[0];
           setSelectedTemplateId(first.template_id);
           setTemplateSubject(first.subject || '');
         }

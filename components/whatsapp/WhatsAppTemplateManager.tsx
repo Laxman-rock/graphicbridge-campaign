@@ -27,6 +27,7 @@ import {
 import { WhatsAppTemplate } from '@/types/whatsapp';
 import {
   listWhatsAppTemplates,
+  createWhatsAppTemplate,
   syncWhatsAppTemplates,
   updateWhatsAppTemplateStatus,
   deleteWhatsAppTemplate,
@@ -52,13 +53,20 @@ export default function WhatsAppTemplateManager({
   const [searchTerm, setSearchTerm] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('ALL');
   const [apiNotice, setApiNotice] = useState<string | null>(null);
+  const [pendingStatusToggle, setPendingStatusToggle] = useState<{
+    tmpl: WhatsAppTemplate;
+    nextActive: boolean;
+  } | null>(null);
+  const [isTogglingStatus, setIsTogglingStatus] = useState(false);
 
   // New Template Creator Modal State (Requirement 2 & 6)
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
   const [newTmplName, setNewTmplName] = useState('');
   const [newTmplCategory, setNewTmplCategory] = useState<
     'MARKETING' | 'UTILITY' | 'AUTHENTICATION'
   >('MARKETING');
+  const [newTmplLanguage, setNewTmplLanguage] = useState('en_US');
   const [newTmplHeaderType, setNewTmplHeaderType] = useState<'NONE' | 'IMAGE' | 'TEXT'>(
     'IMAGE'
   );
@@ -74,9 +82,14 @@ export default function WhatsAppTemplateManager({
   const [newTmplButtonText, setNewTmplButtonText] = useState('Claim Offer Now');
   const [newTmplButtonUrl, setNewTmplButtonUrl] = useState('https://example.com/offers');
 
-  const handleCreateTemplate = () => {
+  const handleCreateTemplate = async () => {
     if (!newTmplName.trim()) {
       toastError('Please enter a template name.', 'Name Required');
+      return;
+    }
+
+    if (!newTmplBody.trim()) {
+      toastError('Please enter a message body.', 'Body Required');
       return;
     }
 
@@ -85,25 +98,56 @@ export default function WhatsAppTemplateManager({
       .replace(/[^a-z0-9_]+/g, '_')
       .replace(/^_+|_+$/g, '');
 
-    const components: any[] = [];
-
-    if (newTmplHeaderType === 'IMAGE') {
-      components.push({
-        type: 'HEADER',
-        format: 'IMAGE',
-      });
-    } else if (newTmplHeaderType === 'TEXT' && newTmplHeaderText.trim()) {
-      components.push({
-        type: 'HEADER',
-        format: 'TEXT',
-        text: newTmplHeaderText.trim(),
-      });
+    if (!slugName || !/^[a-z0-9_]+$/.test(slugName)) {
+      toastError(
+        'Template name must contain lowercase letters, numbers, or underscores.',
+        'Invalid Name'
+      );
+      return;
     }
 
-    components.push({
+    const components: Array<Record<string, any>> = [];
+
+    if (newTmplHeaderType === 'IMAGE') {
+      const headerComp: Record<string, any> = {
+        type: 'HEADER',
+        format: 'IMAGE',
+      };
+      if (newTmplHeaderImageUrl.trim()) {
+        headerComp.example = {
+          header_handle: [newTmplHeaderImageUrl.trim()],
+        };
+      }
+      components.push(headerComp);
+    } else if (newTmplHeaderType === 'TEXT' && newTmplHeaderText.trim()) {
+      const headerText = newTmplHeaderText.trim();
+      const headerVars = headerText.match(/\{\{([0-9a-zA-Z_]+)\}\}/g) || [];
+      const headerComp: Record<string, any> = {
+        type: 'HEADER',
+        format: 'TEXT',
+        text: headerText,
+      };
+      if (headerVars.length > 0) {
+        headerComp.example = {
+          header_text: headerVars.map((_, idx) => `Sample${idx + 1}`),
+        };
+      }
+      components.push(headerComp);
+    }
+
+    const bodyText = newTmplBody.trim();
+    const bodyVarMatches = bodyText.match(/\{\{([0-9a-zA-Z_]+)\}\}/g) || [];
+    const bodyVars = Array.from(new Set(bodyVarMatches.map((m) => m.replace(/[{}]/g, ''))));
+    const bodyComp: Record<string, any> = {
       type: 'BODY',
-      text: newTmplBody.trim(),
-    });
+      text: bodyText,
+    };
+    if (bodyVars.length > 0) {
+      bodyComp.example = {
+        body_text: [bodyVars.map((_, idx) => `Sample${idx + 1}`)],
+      };
+    }
+    components.push(bodyComp);
 
     if (newTmplFooter.trim()) {
       components.push({
@@ -113,15 +157,19 @@ export default function WhatsAppTemplateManager({
     }
 
     if (newTmplButtonType === 'URL' && newTmplButtonText.trim()) {
+      const btnUrl = newTmplButtonUrl.trim() || 'https://example.com';
+      const urlHasVar = /\{\{[0-9a-zA-Z_]+\}\}/.test(btnUrl);
+      const urlBtn: Record<string, any> = {
+        type: 'URL',
+        text: newTmplButtonText.trim(),
+        url: btnUrl,
+      };
+      if (urlHasVar) {
+        urlBtn.example = [btnUrl.replace(/\{\{[0-9a-zA-Z_]+\}\}/g, 'SAMPLE')];
+      }
       components.push({
         type: 'BUTTONS',
-        buttons: [
-          {
-            type: 'URL',
-            text: newTmplButtonText.trim(),
-            url: newTmplButtonUrl.trim() || 'https://example.com',
-          },
-        ],
+        buttons: [urlBtn],
       });
     } else if (newTmplButtonType === 'QUICK_REPLY' && newTmplButtonText.trim()) {
       components.push({
@@ -135,27 +183,42 @@ export default function WhatsAppTemplateManager({
       });
     }
 
-    const varMatches = newTmplBody.match(/\{\{([0-9a-zA-Z_]+)\}\}/g) || [];
-    const vars = Array.from(new Set(varMatches.map((m) => m.replace(/[{}]/g, ''))));
+    setIsCreating(true);
+    try {
+      const res = await createWhatsAppTemplate({
+        name: slugName,
+        category: newTmplCategory,
+        language: newTmplLanguage || 'en_US',
+        allow_category_change: true,
+        components,
+      });
 
-    const newTemplate: WhatsAppTemplate = {
-      id: `custom_${Date.now()}`,
-      template_id: `custom_${Date.now()}`,
-      name: slugName,
-      category: newTmplCategory,
-      language: 'en',
-      status: 'APPROVED',
-      is_active: true,
-      last_synced_at: new Date().toISOString(),
-      variables: vars,
-      components,
-    };
-
-    setSyncedTemplates((prev) => [newTemplate, ...prev]);
-    setActiveTab('synced');
-    setIsCreateModalOpen(false);
-    setNewTmplName('');
-    toastSuccess(`Template "${slugName}" created and ready to use!`, 'Template Saved');
+      if (res.success) {
+        const saved = res.template || res.data;
+        if (saved) {
+          setSyncedTemplates((prev) => [
+            saved,
+            ...prev.filter((t) => t.name !== saved.name),
+          ]);
+        }
+        setActiveTab('synced');
+        setIsCreateModalOpen(false);
+        setNewTmplName('');
+        toastSuccess(
+          res.message || `Template "${slugName}" submitted to Meta and saved!`,
+          'Template Created'
+        );
+      } else {
+        toastError(
+          res.error || 'Failed to save WhatsApp template via API.',
+          'Creation Failed'
+        );
+      }
+    } catch {
+      toastError('Failed to connect to WhatsApp templates API.', 'Connection Error');
+    } finally {
+      setIsCreating(false);
+    }
   };
 
   const fetchTemplates = useCallback(
@@ -163,7 +226,7 @@ export default function WhatsAppTemplateManager({
       setIsLoading(true);
       setApiNotice(null);
       try {
-        const res = await listWhatsAppTemplates();
+        const res = await listWhatsAppTemplates({ status: 'ALL' });
         if (res.success && res.data && res.data.length > 0) {
           setSyncedTemplates(res.data);
           setActiveTab('synced');
@@ -229,26 +292,40 @@ export default function WhatsAppTemplateManager({
     }
   };
 
-  const handleToggleStatus = async (tmpl: WhatsAppTemplate) => {
+  const handleToggleStatus = (tmpl: WhatsAppTemplate) => {
     const id = tmpl._id || tmpl.id || tmpl.template_id;
     if (!id) return;
-    const newStatus = !tmpl.is_active;
+    setPendingStatusToggle({ tmpl, nextActive: !tmpl.is_active });
+  };
 
+  const confirmToggleStatus = async () => {
+    if (!pendingStatusToggle) return;
+    const { tmpl, nextActive } = pendingStatusToggle;
+    const id = tmpl._id || tmpl.id || tmpl.template_id;
+    if (!id) {
+      setPendingStatusToggle(null);
+      return;
+    }
+
+    setIsTogglingStatus(true);
     try {
-      const res = await updateWhatsAppTemplateStatus(id, newStatus);
+      const res = await updateWhatsAppTemplateStatus(id, nextActive);
       if (res.success) {
         toastSuccess(
-          `Template "${tmpl.name}" is now ${newStatus ? 'enabled' : 'disabled'}.`,
+          `Template "${tmpl.name}" is now ${nextActive ? 'active' : 'inactive'}.`,
           'Status Updated'
         );
         setSyncedTemplates((prev) =>
-          prev.map((t) => (t === tmpl ? { ...t, is_active: newStatus } : t))
+          prev.map((t) => (t === tmpl ? { ...t, is_active: nextActive } : t))
         );
+        setPendingStatusToggle(null);
       } else {
         toastError(res.error || 'Failed to update status.', 'Error');
       }
     } catch {
       toastError('Status toggle failed.', 'Error');
+    } finally {
+      setIsTogglingStatus(false);
     }
   };
 
@@ -339,17 +416,6 @@ export default function WhatsAppTemplateManager({
         </div>
 
         <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
-          {onOpenConfigModal && (
-            <button
-              type="button"
-              onClick={onOpenConfigModal}
-              className="inline-flex items-center gap-2 px-4 py-3 rounded-2xl bg-white/10 hover:bg-white/20 border border-white/20 text-white font-semibold text-xs transition-all backdrop-blur-sm"
-            >
-              <Settings className="w-4 h-4 text-emerald-300" />
-              <span>Meta API Settings</span>
-            </button>
-          )}
-
           <button
             type="button"
             onClick={() => setIsCreateModalOpen(true)}
@@ -628,7 +694,7 @@ export default function WhatsAppTemplateManager({
                         ) : (
                           <>
                             <ToggleLeft className="w-5 h-5 text-slate-400" />
-                            <span className="text-slate-400">Disabled</span>
+                            <span className="text-slate-500">Inactive</span>
                           </>
                         )}
                       </button>
@@ -687,7 +753,7 @@ export default function WhatsAppTemplateManager({
             <div className="flex-1 p-6 overflow-y-auto grid grid-cols-1 lg:grid-cols-2 gap-6">
               {/* Left Column: Form & Image Upload */}
               <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
                     <label className="text-xs font-bold text-slate-700 block mb-1">
                       Template Name <span className="text-rose-500">*</span>
@@ -696,7 +762,7 @@ export default function WhatsAppTemplateManager({
                       type="text"
                       value={newTmplName}
                       onChange={(e) => setNewTmplName(e.target.value)}
-                      placeholder="e.g. promo_announcement"
+                      placeholder="e.g. order_ready_notice"
                       className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs font-medium focus:outline-none focus:border-emerald-500"
                     />
                   </div>
@@ -713,6 +779,22 @@ export default function WhatsAppTemplateManager({
                       <option value="MARKETING">MARKETING</option>
                       <option value="UTILITY">UTILITY</option>
                       <option value="AUTHENTICATION">AUTHENTICATION</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 block mb-1">
+                      Language
+                    </label>
+                    <select
+                      value={newTmplLanguage}
+                      onChange={(e) => setNewTmplLanguage(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs font-medium bg-white focus:outline-none focus:border-emerald-500"
+                    >
+                      <option value="en_US">English (en_US)</option>
+                      <option value="en">English (en)</option>
+                      <option value="hi">Hindi (hi)</option>
+                      <option value="ta">Tamil (ta)</option>
                     </select>
                   </div>
                 </div>
@@ -894,18 +976,77 @@ export default function WhatsAppTemplateManager({
             <div className="px-6 py-4 bg-slate-50/80 border-t border-slate-100 flex items-center justify-end gap-3">
               <button
                 type="button"
+                disabled={isCreating}
                 onClick={() => setIsCreateModalOpen(false)}
-                className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-200/70 text-xs font-semibold transition-colors"
+                className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-200/70 text-xs font-semibold transition-colors disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
                 type="button"
+                disabled={isCreating}
                 onClick={handleCreateTemplate}
-                className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-md shadow-emerald-500/20 transition-all flex items-center gap-1.5"
+                className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-md shadow-emerald-500/20 transition-all flex items-center gap-1.5 disabled:opacity-60"
               >
-                <CheckCircle2 className="w-4 h-4" />
-                <span>Save WhatsApp Template</span>
+                {isCreating ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span>Saving to Meta...</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Save WhatsApp Template</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Active / Inactive Confirmation Modal */}
+      {pendingStatusToggle && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+          <div className="relative w-full max-w-sm bg-white rounded-3xl shadow-2xl border border-slate-100 p-6 space-y-4">
+            <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+
+            <div className="text-center space-y-1">
+              <h4 className="text-base font-bold text-slate-900">
+                {pendingStatusToggle.nextActive ? 'Activate Template?' : 'Deactivate Template?'}
+              </h4>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                Are you sure you want to mark{' '}
+                <span className="font-semibold text-slate-800">{pendingStatusToggle.tmpl.name}</span> as{' '}
+                <span className="font-semibold text-slate-800">
+                  {pendingStatusToggle.nextActive ? 'Active' : 'Inactive'}
+                </span>
+                ?
+              </p>
+            </div>
+
+            <div className="flex items-center justify-center gap-3 pt-2">
+              <button
+                type="button"
+                disabled={isTogglingStatus}
+                onClick={() => setPendingStatusToggle(null)}
+                className="flex-1 px-4 py-2.5 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors disabled:opacity-50"
+              >
+                No
+              </button>
+              <button
+                type="button"
+                disabled={isTogglingStatus}
+                onClick={confirmToggleStatus}
+                className={`flex-1 px-4 py-2.5 text-xs font-bold text-white rounded-xl shadow-md transition-all disabled:opacity-50 ${
+                  pendingStatusToggle.nextActive
+                    ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-500/20'
+                    : 'bg-rose-600 hover:bg-rose-700 shadow-rose-500/20'
+                }`}
+              >
+                {isTogglingStatus ? 'Updating...' : 'Yes'}
               </button>
             </div>
           </div>

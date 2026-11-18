@@ -147,9 +147,13 @@ export default function WhatsAppCampaignWizard({
           }
         }
 
-        // Display ONLY templates with status: "APPROVED"
+        // Display ONLY active templates with status: "APPROVED"
         const approved = loaded
-          ? loaded.filter((t) => (t.status || '').toUpperCase() === 'APPROVED')
+          ? loaded.filter(
+              (t) =>
+                (t.status || '').toUpperCase() === 'APPROVED' &&
+                t.is_active !== false
+            )
           : [];
 
         if (approved.length > 0) {
@@ -193,7 +197,11 @@ export default function WhatsAppCampaignWizard({
           : syncRes.data;
 
       const approved = loaded
-        ? loaded.filter((t) => (t.status || '').toUpperCase() === 'APPROVED')
+        ? loaded.filter(
+            (t) =>
+              (t.status || '').toUpperCase() === 'APPROVED' &&
+              t.is_active !== false
+          )
         : [];
 
       if (approved.length > 0) {
