@@ -116,6 +116,27 @@ export interface SyncTemplatesResponse {
   error?: string;
 }
 
+export interface CreateWhatsAppTemplateRequest {
+  name: string;
+  category: 'MARKETING' | 'UTILITY' | 'AUTHENTICATION' | string;
+  language?: string;
+  allow_category_change?: boolean;
+  components: Array<Record<string, any>>;
+}
+
+export interface CreateWhatsAppTemplateResponse {
+  success: boolean;
+  message?: string;
+  meta?: {
+    id?: string;
+    status?: string;
+    category?: string;
+  };
+  template?: WhatsAppTemplate;
+  data?: WhatsAppTemplate;
+  error?: string;
+}
+
 // 3. WhatsApp Campaign
 export interface CreateWhatsAppCampaignRequest {
   campaign_name: string;

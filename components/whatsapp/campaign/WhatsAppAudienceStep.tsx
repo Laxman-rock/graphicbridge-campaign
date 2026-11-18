@@ -346,7 +346,9 @@ export default function WhatsAppAudienceStep({
       }
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
-        const matchesPhone = rec.phone.toLowerCase().includes(q);
+        const matchesPhone =
+          rec.phone.toLowerCase().includes(q) ||
+          (rec.formattedPhone?.toLowerCase().includes(q) ?? false);
         const matchesName = rec.name?.toLowerCase().includes(q) ?? false;
         return matchesPhone || matchesName;
       }

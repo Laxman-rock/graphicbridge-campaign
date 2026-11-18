@@ -8,15 +8,33 @@ import WhatsAppCampaignWizard from '@/components/whatsapp/WhatsAppCampaignWizard
 import WhatsAppCampaignsList from '@/components/whatsapp/WhatsAppCampaignsList';
 import WhatsAppTemplateManager from '@/components/whatsapp/WhatsAppTemplateManager';
 import WhatsAppConfigModal from '@/components/whatsapp/WhatsAppConfigModal';
-import { Send, History, MessageSquare, Settings } from 'lucide-react';
+import { Send, History, MessageSquare, Settings, AlertTriangle } from 'lucide-react';
 
 type WhatsAppTab = 'wizard' | 'history' | 'templates';
 
+const TAB_LABELS: Record<WhatsAppTab, string> = {
+  wizard: 'Create Campaign',
+  history: 'Campaigns History',
+  templates: 'WhatsApp Templates',
+};
+
 export default function WhatsAppCampaignPage() {
   const [activeTab, setActiveTab] = useState<WhatsAppTab>('wizard');
+  const [pendingTab, setPendingTab] = useState<WhatsAppTab | null>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
+
+  const handleTabClick = (tab: WhatsAppTab) => {
+    if (tab === activeTab) return;
+    setPendingTab(tab);
+  };
+
+  const confirmTabSwitch = () => {
+    if (!pendingTab) return;
+    setActiveTab(pendingTab);
+    setPendingTab(null);
+  };
 
   return (
     <div className="min-h-screen flex flex-col bg-[#F8FAFC]">
@@ -47,7 +65,7 @@ export default function WhatsAppCampaignPage() {
           <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-2xl text-xs font-semibold overflow-x-auto scrollbar-none">
             <button
               type="button"
-              onClick={() => setActiveTab('wizard')}
+              onClick={() => handleTabClick('wizard')}
               className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-all whitespace-nowrap ${
                 activeTab === 'wizard'
                   ? 'bg-white text-emerald-600 shadow-sm'
@@ -60,7 +78,7 @@ export default function WhatsAppCampaignPage() {
 
             <button
               type="button"
-              onClick={() => setActiveTab('history')}
+              onClick={() => handleTabClick('history')}
               className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-all whitespace-nowrap ${
                 activeTab === 'history'
                   ? 'bg-white text-emerald-600 shadow-sm'
@@ -73,7 +91,7 @@ export default function WhatsAppCampaignPage() {
 
             <button
               type="button"
-              onClick={() => setActiveTab('templates')}
+              onClick={() => handleTabClick('templates')}
               className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-all whitespace-nowrap ${
                 activeTab === 'templates'
                   ? 'bg-white text-emerald-600 shadow-sm'
@@ -118,6 +136,42 @@ export default function WhatsAppCampaignPage() {
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
       />
+
+      {/* Tab Navigation Confirmation Modal */}
+      {pendingTab && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+          <div className="relative w-full max-w-sm bg-white rounded-3xl shadow-2xl border border-slate-100 p-6 space-y-4">
+            <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+
+            <div className="text-center space-y-1">
+              <h4 className="text-base font-bold text-slate-900">Confirm Navigation</h4>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                Do you want to switch to{' '}
+                <span className="font-semibold text-slate-800">{TAB_LABELS[pendingTab]}</span>? Any unsaved progress in the current tab may be lost.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-center gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setPendingTab(null)}
+                className="flex-1 px-4 py-2.5 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors"
+              >
+                No
+              </button>
+              <button
+                type="button"
+                onClick={confirmTabSwitch}
+                className="flex-1 px-4 py-2.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-md shadow-emerald-500/20 transition-all"
+              >
+                Yes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

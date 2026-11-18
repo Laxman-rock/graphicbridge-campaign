@@ -73,7 +73,7 @@ interface WhatsAppCampaignWizardProps {
 export default function WhatsAppCampaignWizard({
   onCampaignCreated,
 }: WhatsAppCampaignWizardProps) {
-  const { error: toastError, success: toastSuccess } = useToast();
+  const { error: toastError, success: toastSuccess, info: toastInfo } = useToast();
 
   // Step state: 1 = CSV & Mobile Column, 2 = Message Setup, 3 = Review & Dispatch
   const [step, setStep] = useState<1 | 2 | 3>(1);
@@ -147,9 +147,13 @@ export default function WhatsAppCampaignWizard({
           }
         }
 
-        // Display ONLY templates with status: "APPROVED"
+        // Display ONLY active templates with status: "APPROVED"
         const approved = loaded
-          ? loaded.filter((t) => (t.status || '').toUpperCase() === 'APPROVED')
+          ? loaded.filter(
+              (t) =>
+                (t.status || '').toUpperCase() === 'APPROVED' &&
+                t.is_active !== false
+            )
           : [];
 
         if (approved.length > 0) {
@@ -193,7 +197,11 @@ export default function WhatsAppCampaignWizard({
           : syncRes.data;
 
       const approved = loaded
-        ? loaded.filter((t) => (t.status || '').toUpperCase() === 'APPROVED')
+        ? loaded.filter(
+            (t) =>
+              (t.status || '').toUpperCase() === 'APPROVED' &&
+              t.is_active !== false
+          )
         : [];
 
       if (approved.length > 0) {
@@ -377,14 +385,19 @@ export default function WhatsAppCampaignWizard({
       }
 
       // Name column mapping or detection
-      const nameVal =
-        rec.name ||
-        (importResult?.selectedNameCol ? rec.raw[importResult.selectedNameCol] : undefined) ||
-        rec.raw['name'] ||
-        rec.raw['customer_name'] ||
-        rec.raw['first_name'];
+      // Respect explicit None selection when a CSV is uploaded
+      const nameVal = importResult
+        ? rec.name ||
+          (importResult.selectedNameCol ? rec.raw[importResult.selectedNameCol] : undefined)
+        : rec.name ||
+          rec.raw['name'] ||
+          rec.raw['customer_name'] ||
+          rec.raw['first_name'];
 
-      if (nameVal && !recipientVars.customer_name && !recipientVars['1']) {
+      // Only populate variable '1' in custom mode or when the template body actually expects {{1}}
+      const expectsVar1 =
+        mode === 'custom' || (mode === 'template' && bodyVariables.includes('1'));
+      if (expectsVar1 && nameVal && !recipientVars.customer_name && !recipientVars['1']) {
         recipientVars['1'] = String(nameVal).trim();
       }
 
@@ -573,17 +586,31 @@ export default function WhatsAppCampaignWizard({
 
       const res = await createWhatsAppCampaign(payload);
       if (res.success) {
-        setCreatedResult(res);
         setSubmitError(null);
         toastSuccess(
           res.message || `WhatsApp campaign "${campaignName}" queued successfully!`,
           'Campaign Queued'
         );
+        if (onCampaignCreated) {
+          onCampaignCreated();
+        } else {
+          setCreatedResult(res);
+        }
       } else {
         const errorMsg =
           res.error ||
           res.message ||
           'Failed to dispatch WhatsApp campaign. Please verify your Meta WhatsApp Cloud API credentials in Settings.';
+        const isTimeout =
+          /timeout|timed out|504|gateway/i.test(errorMsg);
+        if (isTimeout && onCampaignCreated) {
+          toastInfo(
+            'The server is taking longer to process this batch. Moving to Campaigns History so you can monitor its status.',
+            'Checking Campaign History'
+          );
+          onCampaignCreated();
+          return;
+        }
         setSubmitError(errorMsg);
         toastError(errorMsg, 'Creation Error');
       }
@@ -1462,7 +1489,9 @@ export default function WhatsAppCampaignWizard({
                         }
                       });
                     }
-                    if (sample.name && !sampleRecVars['1']) {
+                    const expectsVar1Preview =
+                      mode === 'custom' || (mode === 'template' && bodyVariables.includes('1'));
+                    if (expectsVar1Preview && sample.name && !sampleRecVars['1']) {
                       sampleRecVars['1'] = sample.name;
                     }
 

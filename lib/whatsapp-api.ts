@@ -6,6 +6,8 @@ import {
   WhatsAppTemplate,
   ListWhatsAppTemplatesResponse,
   SyncTemplatesResponse,
+  CreateWhatsAppTemplateRequest,
+  CreateWhatsAppTemplateResponse,
   CreateWhatsAppCampaignRequest,
   CreateWhatsAppCampaignResponse,
   WhatsAppCampaignListParams,
@@ -330,15 +332,21 @@ export function extractTemplateBodyVariables(bodyText?: string): string[] {
   return vars;
 }
 
-export async function listWhatsAppTemplates(): Promise<ListWhatsAppTemplatesResponse> {
+export async function listWhatsAppTemplates(params?: {
+  status?: string;
+  category?: string;
+  language?: string;
+  is_active?: boolean;
+  search?: string;
+}): Promise<ListWhatsAppTemplatesResponse> {
   try {
     let res;
     try {
-      res = await apiClient.get<any>('/api/whatsapp/templates');
+      res = await apiClient.get<any>('/api/whatsapp/templates', { params });
     } catch (err: any) {
       if (err?.response?.status === 404) {
         // Fallback in case route mounted without /api prefix
-        res = await apiClient.get<any>('/whatsapp/templates');
+        res = await apiClient.get<any>('/whatsapp/templates', { params });
       } else {
         throw err;
       }
@@ -372,6 +380,51 @@ export async function listWhatsAppTemplates(): Promise<ListWhatsAppTemplatesResp
       success: false,
       error: extractErrorMessage(err, 'Failed to fetch WhatsApp templates.'),
       data: [],
+    };
+  }
+}
+
+export async function createWhatsAppTemplate(
+  payload: CreateWhatsAppTemplateRequest
+): Promise<CreateWhatsAppTemplateResponse> {
+  try {
+    let res;
+    try {
+      res = await apiClient.post<any>('/api/whatsapp/templates', payload, {
+        timeout: 45000,
+      });
+    } catch (err: any) {
+      if (err?.response?.status === 404) {
+        res = await apiClient.post<any>('/whatsapp/templates', payload, {
+          timeout: 45000,
+        });
+      } else {
+        throw err;
+      }
+    }
+
+    const raw = res.data;
+    const savedTemplate: WhatsAppTemplate | undefined =
+      raw?.template || raw?.data;
+
+    if (raw && (raw.success === false || raw.error)) {
+      return {
+        success: false,
+        error: raw.error || raw.message || 'Failed to create WhatsApp template.',
+      };
+    }
+
+    return {
+      success: true,
+      message: raw?.message || 'Template created successfully in Meta',
+      meta: raw?.meta,
+      template: savedTemplate,
+      data: savedTemplate,
+    };
+  } catch (err) {
+    return {
+      success: false,
+      error: extractErrorMessage(err, 'Failed to create WhatsApp template.'),
     };
   }
 }
@@ -419,10 +472,32 @@ export async function getWhatsAppTemplate(id: string | number): Promise<{ succes
 export async function updateWhatsAppTemplateStatus(
   id: string | number,
   is_active: boolean
-): Promise<{ success: boolean; message?: string; error?: string }> {
+): Promise<{ success: boolean; message?: string; error?: string; data?: WhatsAppTemplate }> {
   try {
-    const res = await apiClient.put(`/api/whatsapp/templates/${id}/status`, { is_active });
-    return res.data;
+    let res;
+    try {
+      res = await apiClient.put(`/api/whatsapp/templates/${id}/status`, { is_active });
+    } catch (err: any) {
+      if (err?.response?.status === 404) {
+        res = await apiClient.put(`/whatsapp/templates/${id}/status`, { is_active });
+      } else {
+        throw err;
+      }
+    }
+
+    const raw = res.data;
+    if (raw && (raw.success === false || raw.error)) {
+      return {
+        success: false,
+        error: raw.error || raw.message || 'Failed to update template status.',
+      };
+    }
+
+    return {
+      success: true,
+      message: raw?.message,
+      data: raw?.template || raw?.data,
+    };
   } catch (err) {
     return {
       success: false,
@@ -433,8 +508,29 @@ export async function updateWhatsAppTemplateStatus(
 
 export async function deleteWhatsAppTemplate(id: string | number): Promise<{ success: boolean; message?: string; error?: string }> {
   try {
-    const res = await apiClient.delete(`/api/whatsapp/templates/${id}`);
-    return res.data;
+    let res;
+    try {
+      res = await apiClient.delete(`/api/whatsapp/templates/${id}`);
+    } catch (err: any) {
+      if (err?.response?.status === 404) {
+        res = await apiClient.delete(`/whatsapp/templates/${id}`);
+      } else {
+        throw err;
+      }
+    }
+
+    const raw = res.data;
+    if (raw && (raw.success === false || raw.error)) {
+      return {
+        success: false,
+        error: raw.error || raw.message || 'Failed to delete template.',
+      };
+    }
+
+    return {
+      success: true,
+      message: raw?.message,
+    };
   } catch (err) {
     return {
       success: false,
@@ -452,14 +548,16 @@ export async function createWhatsAppCampaign(
     try {
       res = await apiClient.post<any>(
         '/api/whatsapp/campaigns',
-        payload
+        payload,
+        { timeout: 180000 }
       );
     } catch (err: unknown) {
       const axiosErr = err as { response?: { status?: number } };
       if (axiosErr?.response?.status === 404) {
         res = await apiClient.post<any>(
           '/whatsapp/campaigns',
-          payload
+          payload,
+          { timeout: 180000 }
         );
       } else {
         throw err;
@@ -773,9 +871,6 @@ export async function listWhatsAppContacts(
   }
   if (params.search?.trim()) {
     queryParams.search = params.search.trim();
-    if (!queryParams.phone_number) {
-      queryParams.phone_number = params.search.trim();
-    }
   }
   if (params.opt_in_status && params.opt_in_status !== 'all') {
     queryParams.opt_in_status = params.opt_in_status;
