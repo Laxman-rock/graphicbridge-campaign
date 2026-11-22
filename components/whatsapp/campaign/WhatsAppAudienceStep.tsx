@@ -321,12 +321,12 @@ export default function WhatsAppAudienceStep({
   // Download Sample CSV
   const handleDownloadSampleCsv = () => {
     const sampleContent =
-      'name,mobile nos,location\n' +
-      'Alice Johnson,9876543210,Chennai\n' +
-      'Bob Kumar,9123456789,Mumbai\n' +
-      'Carlos Ramos,9988776655,Bangalore\n' +
-      'Priya Sharma,8765432109,Delhi\n' +
-      'Rahul Verma,7654321098,Hyderabad\n';
+      'name,mobile nos\n' +
+      'Alice Johnson,9876543210\n' +
+      'Bob Kumar,9123456789\n' +
+      'Carlos Ramos,9988776655\n' +
+      'Priya Sharma,8765432109\n' +
+      'Rahul Verma,7654321098\n';
 
     const blob = new Blob([sampleContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -516,7 +516,7 @@ export default function WhatsAppAudienceStep({
               <div className="min-w-0">
                 <p className="text-xs font-bold text-slate-800">Need a format template?</p>
                 <p className="text-[11px] text-slate-500 truncate">
-                  Download a sample CSV with name, mobile nos, and location columns.
+                  Download a sample CSV with name and mobile nos columns.
                 </p>
               </div>
             </div>

@@ -217,7 +217,7 @@ export default function CsvImporter({
       filename = 'sample_email_contacts.csv';
     } else {
       sampleContent =
-        'name,mobile nos,location\nAlice Johnson,9876543210,Chennai\nBob Kumar,9123456789,Mumbai\nMalformed Number,abc12345,Nowhere\nAlice Johnson,9876543210,Chennai Duplicate\nCarlos Ramos,9988776655,Bangalore\nPriya Sharma,8765432109,Delhi';
+        'name,mobile nos\nAlice Johnson,9876543210\nBob Kumar,9123456789\nMalformed Number,abc12345\nAlice Johnson,9876543210\nCarlos Ramos,9988776655\nPriya Sharma,8765432109';
       filename = 'sample_whatsapp_contacts.csv';
     }
 
