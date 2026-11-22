@@ -321,10 +321,12 @@ export default function WhatsAppAudienceStep({
   // Download Sample CSV
   const handleDownloadSampleCsv = () => {
     const sampleContent =
-      'name,phone_number,location\n' +
-      'Alice Johnson,+14155552671,San Francisco\n' +
-      'Bob Kumar,+919876543210,Mumbai\n' +
-      'Carlos Ramos,+34911234567,Madrid\n';
+      'name,mobile nos,location\n' +
+      'Alice Johnson,9876543210,Chennai\n' +
+      'Bob Kumar,9123456789,Mumbai\n' +
+      'Carlos Ramos,9988776655,Bangalore\n' +
+      'Priya Sharma,8765432109,Delhi\n' +
+      'Rahul Verma,7654321098,Hyderabad\n';
 
     const blob = new Blob([sampleContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -504,6 +506,29 @@ export default function WhatsAppAudienceStep({
               <span>Import WhatsApp Contacts</span>
             </button>
           </div>
+
+          {/* Sample CSV Download */}
+          <div className="mt-6 w-full max-w-md flex items-center justify-between gap-3 p-3.5 rounded-2xl bg-slate-50 border border-slate-200 text-left">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center flex-shrink-0">
+                <Download className="w-4 h-4" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-bold text-slate-800">Need a format template?</p>
+                <p className="text-[11px] text-slate-500 truncate">
+                  Download a sample CSV with name, mobile nos, and location columns.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleDownloadSampleCsv}
+              className="flex-shrink-0 px-3 py-2 rounded-xl bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 text-xs font-semibold shadow-xs transition-colors inline-flex items-center gap-1.5"
+            >
+              <FileText className="w-3.5 h-3.5 text-slate-400" />
+              <span>Download Sample</span>
+            </button>
+          </div>
         </div>
       )}
 
@@ -577,7 +602,7 @@ export default function WhatsAppAudienceStep({
             <div className="space-y-4">
               {/* CSV File Info Banner (Only when a CSV file was actually uploaded) */}
               {importResult && (
-                <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between text-xs">
+                <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-3 text-xs flex-wrap">
                   <div className="flex items-center gap-2">
                     <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
                     <span className="font-bold text-slate-800">{importResult.fileName}</span>
@@ -586,13 +611,23 @@ export default function WhatsAppAudienceStep({
                       {formatFileSize(importResult.fileSizeBytes)}
                     </span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="text-xs font-semibold text-emerald-700 hover:underline"
-                  >
-                    Replace CSV File
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={handleDownloadSampleCsv}
+                      className="text-xs font-semibold text-slate-600 hover:text-emerald-700 hover:underline inline-flex items-center gap-1"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      Sample CSV
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="text-xs font-semibold text-emerald-700 hover:underline"
+                    >
+                      Replace CSV File
+                    </button>
+                  </div>
                 </div>
               )}
 
