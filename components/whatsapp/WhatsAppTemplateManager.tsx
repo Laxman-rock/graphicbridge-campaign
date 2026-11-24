@@ -31,6 +31,7 @@ import {
   syncWhatsAppTemplates,
   updateWhatsAppTemplateStatus,
   deleteWhatsAppTemplate,
+  extractTemplateImageHeader,
 } from '@/lib/whatsapp-api';
 import { WHATSAPP_PRESET_TEMPLATES } from '@/lib/whatsapp-presets';
 import { useToast } from '@/components/ui/Toast';
@@ -609,7 +610,7 @@ export default function WhatsAppTemplateManager({
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {filteredTemplates.map((tmpl) => {
-            const headerComp = tmpl.components?.find((c) => c.type === 'HEADER');
+            const headerInfo = extractTemplateImageHeader(tmpl);
             const bodyComp = tmpl.components?.find((c) => c.type === 'BODY');
             const footerComp = tmpl.components?.find((c) => c.type === 'FOOTER');
             const buttonsComp = tmpl.components?.find((c) => c.type === 'BUTTONS');
@@ -644,12 +645,16 @@ export default function WhatsAppTemplateManager({
                   {/* WhatsApp Chat Bubble Live Preview */}
                   <div className="pt-1">
                     <WhatsAppBubblePreview
-                      headerText={headerComp?.format === 'TEXT' ? headerComp.text : undefined}
+                      headerText={headerInfo.headerFormat === 'TEXT' ? headerInfo.headerText : undefined}
                       headerMediaType={
-                        headerComp?.format === 'IMAGE' || headerComp?.format === 'DOCUMENT'
-                          ? headerComp.format
+                        headerInfo.headerFormat === 'IMAGE' ||
+                        headerInfo.headerFormat === 'DOCUMENT' ||
+                        headerInfo.headerFormat === 'VIDEO'
+                          ? headerInfo.headerFormat
                           : undefined
                       }
+                      headerMediaUrl={headerInfo.exampleMediaUrl}
+                      mediaUnavailable={headerInfo.hasUnresolvedMediaHandle}
                       bodyText={bodyComp?.text || '(No body text)'}
                       footerText={footerComp?.text}
                       buttons={buttonsComp?.buttons}

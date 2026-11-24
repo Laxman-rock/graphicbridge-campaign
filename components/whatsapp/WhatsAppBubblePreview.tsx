@@ -9,6 +9,7 @@ import {
   Copy,
   Image as ImageIcon,
   FileText,
+  Video,
 } from 'lucide-react';
 import { WhatsAppTemplateComponent } from '@/types/whatsapp';
 
@@ -16,6 +17,8 @@ interface WhatsAppBubblePreviewProps {
   headerText?: string;
   headerMediaUrl?: string;
   headerMediaType?: 'IMAGE' | 'DOCUMENT' | 'VIDEO';
+  headerMediaFilename?: string;
+  mediaUnavailable?: boolean;
   bodyText: string;
   footerText?: string;
   buttons?: Array<{
@@ -32,16 +35,20 @@ export default function WhatsAppBubblePreview({
   headerText,
   headerMediaUrl,
   headerMediaType,
+  headerMediaFilename,
+  mediaUnavailable = false,
   bodyText,
   footerText,
   buttons = [],
   timestamp = '12:45 PM',
 }: WhatsAppBubblePreviewProps) {
   const [imgError, setImgError] = React.useState(false);
+  const [imgLoading, setImgLoading] = React.useState(Boolean(headerMediaUrl));
 
   React.useEffect(() => {
     setImgError(false);
-  }, [headerMediaUrl]);
+    setImgLoading(Boolean(headerMediaUrl));
+  }, [headerMediaUrl, headerMediaType]);
 
   // Format basic whatsapp bold/italics
   const formatWhatsAppText = (text: string) => {
@@ -73,20 +80,55 @@ export default function WhatsAppBubblePreview({
       <div className="bg-white rounded-2xl rounded-tl-sm shadow-sm p-3.5 space-y-2.5 relative border border-slate-200/60">
         {/* Header Component */}
         {headerMediaType === 'IMAGE' && (
-          <div className="rounded-xl overflow-hidden bg-slate-100 h-36 flex items-center justify-center border border-slate-200">
+          <div className="rounded-xl overflow-hidden bg-slate-100 h-36 flex items-center justify-center border border-slate-200 relative">
             {headerMediaUrl && !imgError ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
+              <>
+                {imgLoading && (
+                  <div className="absolute inset-0 bg-slate-200/70 animate-pulse flex items-center justify-center">
+                    <ImageIcon className="w-5 h-5 text-slate-400" />
+                  </div>
+                )}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={headerMediaUrl}
+                  alt="Header Media"
+                  referrerPolicy="no-referrer"
+                  className={`w-full h-full object-cover transition-opacity duration-200 ${
+                    imgLoading ? 'opacity-0' : 'opacity-100'
+                  }`}
+                  onLoad={() => setImgLoading(false)}
+                  onError={() => {
+                    setImgLoading(false);
+                    setImgError(true);
+                  }}
+                />
+              </>
+            ) : (
+              <div className="flex flex-col items-center text-slate-400 text-xs px-2 text-center">
+                <ImageIcon className="w-6 h-6 mb-1 text-slate-400" />
+                <span className="text-[11px] font-medium text-slate-500">
+                  {imgError || mediaUnavailable ? 'Image preview unavailable' : 'Header Photo'}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {headerMediaType === 'VIDEO' && (
+          <div className="rounded-xl overflow-hidden bg-slate-900/5 h-36 flex items-center justify-center border border-slate-200 relative">
+            {headerMediaUrl && !imgError ? (
+              <video
                 src={headerMediaUrl}
-                alt="Header Media"
+                controls
+                preload="metadata"
                 className="w-full h-full object-cover"
                 onError={() => setImgError(true)}
               />
             ) : (
               <div className="flex flex-col items-center text-slate-400 text-xs px-2 text-center">
-                <ImageIcon className="w-6 h-6 mb-1 text-slate-400" />
+                <Video className="w-6 h-6 mb-1 text-slate-400" />
                 <span className="text-[11px] font-medium text-slate-500">
-                  {imgError ? 'Header Photo (Preview expired)' : 'Header Photo'}
+                  {imgError || mediaUnavailable ? 'Video preview unavailable' : 'Video Header'}
                 </span>
               </div>
             )}
@@ -95,11 +137,13 @@ export default function WhatsAppBubblePreview({
 
         {headerMediaType === 'DOCUMENT' && (
           <div className="rounded-xl p-3 bg-slate-50 border border-slate-200 flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center">
+            <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center flex-shrink-0">
               <FileText className="w-4 h-4" />
             </div>
             <div className="min-w-0">
-              <p className="text-xs font-semibold text-slate-800 truncate">Document Attachment</p>
+              <p className="text-xs font-semibold text-slate-800 truncate">
+                {headerMediaFilename || 'Document Attachment'}
+              </p>
               <p className="text-[10px] text-slate-400">PDF • Attachment</p>
             </div>
           </div>

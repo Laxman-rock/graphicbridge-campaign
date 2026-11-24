@@ -244,20 +244,39 @@ export async function listMetaWhatsAppTemplates(): Promise<ListWhatsAppTemplates
   }
 }
 
+function isUsableMediaUrl(val: unknown): string | undefined {
+  if (typeof val !== 'string') return undefined;
+  const trimmed = val.trim();
+  if (!trimmed) return undefined;
+  if (
+    /^https?:\/\//i.test(trimmed) ||
+    /^data:image\//i.test(trimmed) ||
+    /^blob:/i.test(trimmed) ||
+    trimmed.startsWith('/')
+  ) {
+    return trimmed;
+  }
+  return undefined;
+}
+
 /**
- * Extract template image header details from components
+ * Extract template header format, text, and media preview URL from components
  */
 export function extractTemplateImageHeader(template?: WhatsAppTemplate | null): {
   hasImageHeader: boolean;
   headerFormat: 'IMAGE' | 'TEXT' | 'DOCUMENT' | 'VIDEO' | 'NONE';
   exampleImageUrl?: string;
+  exampleMediaUrl?: string;
+  hasUnresolvedMediaHandle?: boolean;
   headerText?: string;
 } {
   if (!template || !Array.isArray(template.components)) {
     return { hasImageHeader: false, headerFormat: 'NONE' };
   }
 
-  const headerComp = template.components.find((c) => c.type === 'HEADER');
+  const headerComp = template.components.find(
+    (c) => String(c.type || '').toUpperCase() === 'HEADER'
+  );
   if (!headerComp) {
     return { hasImageHeader: false, headerFormat: 'NONE' };
   }
@@ -270,29 +289,49 @@ export function extractTemplateImageHeader(template?: WhatsAppTemplate | null): 
     | 'NONE';
 
   const isImage = format === 'IMAGE';
+  const isMedia = format === 'IMAGE' || format === 'VIDEO' || format === 'DOCUMENT';
   let exampleUrl: string | undefined = undefined;
+  let hasRawHandle = false;
 
-  if (headerComp.example) {
-    const ex = headerComp.example as any;
-    if (Array.isArray(ex.header_handle) && ex.header_handle.length > 0) {
-      exampleUrl = String(ex.header_handle[0]);
-    } else if (typeof ex.header_handle === 'string' && ex.header_handle.trim()) {
-      exampleUrl = ex.header_handle.trim();
-    } else if (Array.isArray(ex.header_url) && ex.header_url.length > 0) {
-      exampleUrl = String(ex.header_url[0]);
-    } else if (typeof ex.header_url === 'string' && ex.header_url.trim()) {
-      exampleUrl = ex.header_url.trim();
+  if (isMedia) {
+    const ex = (headerComp.example || {}) as any;
+    const rawHeaderHandle = Array.isArray(ex.header_handle)
+      ? ex.header_handle[0]
+      : ex.header_handle;
+    const rawHeaderUrl = Array.isArray(ex.header_url)
+      ? ex.header_url[0]
+      : ex.header_url;
+
+    const candidates: unknown[] = [
+      rawHeaderUrl,
+      rawHeaderHandle,
+      ex.url,
+      (headerComp as any).media_url,
+      (headerComp as any).image_url,
+      (headerComp as any).url,
+      (template as any).header_image_url,
+      (template as any).media_url,
+      isImage ? headerComp.text : undefined,
+    ];
+
+    for (const candidate of candidates) {
+      const usable = isUsableMediaUrl(candidate);
+      if (usable) {
+        exampleUrl = usable;
+        break;
+      }
+      if (typeof candidate === 'string' && candidate.trim()) {
+        hasRawHandle = true;
+      }
     }
-  }
-
-  if (!exampleUrl && isImage && headerComp.text && /^https?:\/\//i.test(headerComp.text.trim())) {
-    exampleUrl = headerComp.text.trim();
   }
 
   return {
     hasImageHeader: isImage,
     headerFormat: format,
-    exampleImageUrl: exampleUrl,
+    exampleImageUrl: isImage ? exampleUrl : undefined,
+    exampleMediaUrl: isMedia ? exampleUrl : undefined,
+    hasUnresolvedMediaHandle: isMedia && !exampleUrl && hasRawHandle,
     headerText: headerComp.text,
   };
 }
