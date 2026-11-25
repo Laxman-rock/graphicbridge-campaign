@@ -1,26 +1,18 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   X,
   Users,
   Search,
-  Filter,
   CheckCircle2,
   AlertCircle,
-  Clock,
-  ShieldCheck,
-  ShieldAlert,
   Loader2,
-  ChevronLeft,
-  ChevronRight,
-  ChevronsLeft,
-  ChevronsRight,
   ArrowRight,
   RefreshCw,
-  Phone,
-  Tag,
-  Folder,
+  Check,
+  Layers,
+  ShieldCheck,
 } from 'lucide-react';
 import {
   WhatsAppContactItem,
@@ -37,6 +29,15 @@ interface WhatsAppContactsPickerModalProps {
   onImportSelected: (contacts: UnifiedWhatsAppRecipient[]) => void;
 }
 
+interface ContactGridBatch {
+  gridNumber: number;
+  start: number;
+  end: number;
+  contacts: WhatsAppContactItem[];
+}
+
+const DEFAULT_BATCH_SIZE = 500;
+
 export default function WhatsAppContactsPickerModal({
   isOpen,
   onClose,
@@ -45,178 +46,215 @@ export default function WhatsAppContactsPickerModal({
 }: WhatsAppContactsPickerModalProps) {
   const { error: toastError, success: toastSuccess } = useToast();
 
-  const [contacts, setContacts] = useState<WhatsAppContactItem[]>([]);
-  const [pagination, setPagination] = useState({
-    page: 1,
-    limit: 10,
-    total: 0,
-    pages: 1,
-  });
+  // Complete filtered eligible dataset & directory totals
+  const [eligibleContacts, setEligibleContacts] = useState<WhatsAppContactItem[]>([]);
+  const [totalDirectoryContacts, setTotalDirectoryContacts] = useState(0);
+  const [batchSize, setBatchSize] = useState<number>(DEFAULT_BATCH_SIZE);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadProgress, setLoadProgress] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
   const [optInFilter, setOptInFilter] = useState<string>('all');
   const [tagFilter, setTagFilter] = useState<string>('');
-  const [groupFilter, setGroupFilter] = useState<string>('');
 
-  // Selected contacts: map of contact ID -> WhatsAppContactItem (persists across page changes)
+  // Selected contacts keyed by unique contact identifier
   const [selectedContacts, setSelectedContacts] = useState<Map<string, WhatsAppContactItem>>(
     new Map()
   );
 
-  // Fetch contacts for a specific page and limit
-  const fetchContacts = useCallback(
-    async (pageToLoad: number, limitToLoad = pagination.limit) => {
-      setIsLoading(true);
-      setLoadError(null);
+  // Import confirmation dialog state & double-click guard
+  const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const fetchSeqRef = useRef(0);
 
-      try {
-        const params: WhatsAppContactListParams = {
-          page: pageToLoad,
-          limit: limitToLoad,
-        };
-
-        if (searchQuery.trim()) {
-          params.search = searchQuery.trim();
-        }
-        if (optInFilter !== 'all') {
-          params.opt_in_status = optInFilter;
-        }
-        if (tagFilter.trim()) {
-          params.tag = tagFilter.trim();
-        }
-        if (groupFilter.trim()) {
-          params.group = groupFilter.trim();
-        }
-
-        const res = await listWhatsAppContacts(params);
-        if (res.success && res.data) {
-          setContacts(res.data);
-          if (res.pagination) {
-            setPagination({
-              page: Number(res.pagination.page ?? pageToLoad),
-              limit: Number(res.pagination.limit ?? limitToLoad),
-              total: Number(res.pagination.total ?? res.data.length),
-              pages: Math.max(1, Number(res.pagination.pages ?? 1)),
-            });
-          } else {
-            const tot = Number(res.total ?? res.data.length);
-            setPagination({
-              page: pageToLoad,
-              limit: limitToLoad,
-              total: tot,
-              pages: Math.max(1, Math.ceil(tot / limitToLoad)),
-            });
-          }
-        } else {
-          setLoadError(res.error || 'Failed to fetch WhatsApp contacts.');
-        }
-      } catch (err: any) {
-        setLoadError(err?.message || 'Could not connect to contacts server.');
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [searchQuery, optInFilter, tagFilter, groupFilter, pagination.limit]
-  );
-
-  // Load initial page whenever modal is opened
-  useEffect(() => {
-    if (isOpen) {
-      setPagination((prev) => ({ ...prev, page: 1 }));
-      fetchContacts(1, pagination.limit);
-    }
-  }, [isOpen]); // Only runs on modal open/close transitions
-
-  // Navigate to any page
-  const goToPage = (newPage: number) => {
-    const totalPages = pagination.pages || 1;
-    if (newPage < 1 || newPage > totalPages || newPage === pagination.page || isLoading) {
-      return;
-    }
-    setPagination((prev) => ({ ...prev, page: newPage }));
-    fetchContacts(newPage, pagination.limit);
-  };
-
-  // Change page size limit
-  const handleLimitChange = (newLimit: number) => {
-    setPagination((prev) => ({ ...prev, page: 1, limit: newLimit }));
-    fetchContacts(1, newLimit);
-  };
-
-  // Apply filters
-  const handleApplyFilter = () => {
-    setPagination((prev) => ({ ...prev, page: 1 }));
-    fetchContacts(1, pagination.limit);
-  };
+  const getContactKey = useCallback((c: WhatsAppContactItem): string => {
+    const rawId = c.id ?? c._id ?? c.contact_id;
+    const normalizedPhone = normalizePhoneNumber(c.whatsapp_number);
+    return rawId !== undefined && rawId !== null && String(rawId).trim() !== ''
+      ? String(rawId)
+      : normalizedPhone;
+  }, []);
 
   // Eligibility check:
-  // ONLY contacts with valid phone numbers and opt_in_status === 'opted_in' are eligible!
-  const isContactEligible = (c: WhatsAppContactItem): { eligible: boolean; reason?: string } => {
-    const rawOpt = c.opt_in_status?.toLowerCase();
-    const isOptedIn =
-      rawOpt === 'opted_in' ||
-      rawOpt === 'opt-in' ||
-      rawOpt === 'yes' ||
-      rawOpt === 'true';
+  // ONLY contacts with valid phone numbers, active status, and opt_in_status === 'opted_in' are eligible.
+  const isContactEligible = useCallback(
+    (c: WhatsAppContactItem): { eligible: boolean; reason?: string } => {
+      const rawOpt = c.opt_in_status?.toLowerCase();
+      const isOptedIn =
+        rawOpt === 'opted_in' ||
+        rawOpt === 'opt-in' ||
+        rawOpt === 'yes' ||
+        rawOpt === 'true';
 
-    if (!isOptedIn) {
-      if (rawOpt === 'opted_out' || rawOpt === 'opt-out' || rawOpt === 'no') {
-        return { eligible: false, reason: 'Ineligible (Opted Out)' };
+      if (!isOptedIn) {
+        if (rawOpt === 'opted_out' || rawOpt === 'opt-out' || rawOpt === 'no') {
+          return { eligible: false, reason: 'Ineligible (Opted Out)' };
+        }
+        return { eligible: false, reason: 'Ineligible (Pending Opt-In)' };
       }
-      return { eligible: false, reason: 'Ineligible (Pending Opt-In)' };
+
+      const isActive = c.is_active ?? c.active ?? true;
+      if (!isActive) {
+        return { eligible: false, reason: 'Ineligible (Inactive Contact)' };
+      }
+
+      const normalized = normalizePhoneNumber(c.whatsapp_number);
+      if (!/^\+[1-9]\d{6,14}$/.test(normalized)) {
+        return { eligible: false, reason: 'Invalid phone format' };
+      }
+
+      return { eligible: true };
+    },
+    []
+  );
+
+  // Fetch all pages for the active filter set so grid boundaries are stable across the full eligible dataset
+  const fetchAllFilteredContacts = useCallback(async () => {
+    const seq = ++fetchSeqRef.current;
+    setIsLoading(true);
+    setLoadError(null);
+    setLoadProgress('Loading contacts...');
+
+    try {
+      const baseParams: WhatsAppContactListParams = {
+        limit: 1000,
+      };
+      if (searchQuery.trim()) {
+        baseParams.search = searchQuery.trim();
+      }
+      if (optInFilter !== 'all') {
+        baseParams.opt_in_status = optInFilter;
+      }
+      if (tagFilter.trim()) {
+        baseParams.tag = tagFilter.trim();
+      }
+
+      const firstRes = await listWhatsAppContacts({ ...baseParams, page: 1 });
+      if (seq !== fetchSeqRef.current) return;
+
+      if (!firstRes.success || !firstRes.data) {
+        setLoadError(firstRes.error || 'Failed to fetch WhatsApp contacts.');
+        setEligibleContacts([]);
+        setTotalDirectoryContacts(0);
+        return;
+      }
+
+      const allRaw: WhatsAppContactItem[] = [...firstRes.data];
+      const totalPages = Math.max(1, Number(firstRes.pagination?.pages ?? 1));
+      const totalReported = Number(
+        firstRes.pagination?.total ?? firstRes.total ?? firstRes.data.length
+      );
+
+      for (let pg = 2; pg <= totalPages; pg++) {
+        if (seq !== fetchSeqRef.current) return;
+        setLoadProgress(`Loading batch ${pg} of ${totalPages}...`);
+        const nextRes = await listWhatsAppContacts({ ...baseParams, page: pg });
+        if (seq !== fetchSeqRef.current) return;
+        if (nextRes.success && Array.isArray(nextRes.data)) {
+          allRaw.push(...nextRes.data);
+        }
+      }
+
+      // Deduplicate by contact key and normalized phone, keeping only eligible contacts
+      const seenKeys = new Set<string>();
+      const seenPhones = new Set<string>();
+      const nextEligible: WhatsAppContactItem[] = [];
+
+      for (const contact of allRaw) {
+        if (!isContactEligible(contact).eligible) continue;
+        const key = getContactKey(contact);
+        const normPhone = normalizePhoneNumber(contact.whatsapp_number);
+        if (seenKeys.has(key) || (normPhone && seenPhones.has(normPhone))) {
+          continue;
+        }
+        seenKeys.add(key);
+        if (normPhone) seenPhones.add(normPhone);
+        nextEligible.push(contact);
+      }
+
+      setEligibleContacts(nextEligible);
+      setTotalDirectoryContacts(Math.max(totalReported, allRaw.length));
+
+      // Preserve only selections that still exist in the updated eligible dataset
+      const validKeySet = new Set(nextEligible.map((c) => getContactKey(c)));
+      setSelectedContacts((prev) => {
+        if (prev.size === 0) return prev;
+        const pruned = new Map<string, WhatsAppContactItem>();
+        prev.forEach((val, key) => {
+          if (validKeySet.has(key)) {
+            pruned.set(key, val);
+          }
+        });
+        return pruned;
+      });
+    } catch (err: any) {
+      if (seq !== fetchSeqRef.current) return;
+      setLoadError(err?.message || 'Could not connect to contacts server.');
+    } finally {
+      if (seq === fetchSeqRef.current) {
+        setIsLoading(false);
+        setLoadProgress(null);
+      }
     }
+  }, [searchQuery, optInFilter, tagFilter, isContactEligible, getContactKey]);
 
-    const isActive = c.is_active ?? c.active ?? true;
-    if (!isActive) {
-      return { eligible: false, reason: 'Ineligible (Inactive Contact)' };
+  // Load initial dataset when modal opens
+  useEffect(() => {
+    if (isOpen) {
+      setIsConfirmModalOpen(false);
+      setIsImporting(false);
+      fetchAllFilteredContacts();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
 
-    const normalized = normalizePhoneNumber(c.whatsapp_number);
-    if (!/^\+[1-9]\d{6,14}$/.test(normalized)) {
-      return { eligible: false, reason: 'Invalid phone format' };
+  // Build dynamic grids: Number of Grids = Ceiling(Total Eligible Contacts / Batch Size)
+  const grids: ContactGridBatch[] = useMemo(() => {
+    if (eligibleContacts.length === 0) return [];
+    const safeBatch = Math.max(1, batchSize);
+    const totalGrids = Math.ceil(eligibleContacts.length / safeBatch);
+    const batches: ContactGridBatch[] = [];
+
+    for (let i = 0; i < totalGrids; i++) {
+      const startIdx = i * safeBatch;
+      const slice = eligibleContacts.slice(startIdx, startIdx + safeBatch);
+      batches.push({
+        gridNumber: i + 1,
+        start: startIdx + 1,
+        end: startIdx + slice.length,
+        contacts: slice,
+      });
     }
+    return batches;
+  }, [eligibleContacts, batchSize]);
 
-    return { eligible: true };
-  };
+  // Check if a specific grid is fully selected
+  const isGridSelected = useCallback(
+    (grid: ContactGridBatch): boolean => {
+      if (grid.contacts.length === 0) return false;
+      return grid.contacts.every((c) => selectedContacts.has(getContactKey(c)));
+    },
+    [selectedContacts, getContactKey]
+  );
 
-  // Toggle selection for a single contact
-  const handleToggleSelect = (contact: WhatsAppContactItem) => {
-    const key = String(contact.id ?? contact._id ?? contact.contact_id);
+  const selectedGridCount = useMemo(() => {
+    return grids.filter((g) => isGridSelected(g)).length;
+  }, [grids, isGridSelected]);
+
+  // Toggle an entire grid of eligible contacts
+  const handleToggleGrid = (grid: ContactGridBatch) => {
+    const currentlySelected = isGridSelected(grid);
     setSelectedContacts((prev) => {
       const next = new Map(prev);
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.set(key, contact);
-      }
-      return next;
-    });
-  };
-
-  // Eligible contacts on current page
-  const eligibleOnCurrentPage = useMemo(() => {
-    return contacts.filter((c) => isContactEligible(c).eligible);
-  }, [contacts]);
-
-  const areAllCurrentPageEligibleSelected =
-    eligibleOnCurrentPage.length > 0 &&
-    eligibleOnCurrentPage.every((c) =>
-      selectedContacts.has(String(c.id ?? c._id ?? c.contact_id))
-    );
-
-  const handleToggleSelectAllPage = () => {
-    setSelectedContacts((prev) => {
-      const next = new Map(prev);
-      if (areAllCurrentPageEligibleSelected) {
-        eligibleOnCurrentPage.forEach((c) => {
-          next.delete(String(c.id ?? c._id ?? c.contact_id));
+      if (currentlySelected) {
+        grid.contacts.forEach((c) => {
+          next.delete(getContactKey(c));
         });
       } else {
-        eligibleOnCurrentPage.forEach((c) => {
-          next.set(String(c.id ?? c._id ?? c.contact_id), c);
+        grid.contacts.forEach((c) => {
+          next.set(getContactKey(c), c);
         });
       }
       return next;
@@ -227,92 +265,109 @@ export default function WhatsAppContactsPickerModal({
     setSelectedContacts(new Map());
   };
 
-  // Import selected contacts into audience
-  const handleConfirmImport = () => {
+  const handleOpenImportConfirm = () => {
     if (selectedContacts.size === 0) {
-      toastError('No contacts selected.', 'Selection Empty');
+      toastError('Please select at least one contact grid to import.', 'Selection Empty');
+      return;
+    }
+    setIsConfirmModalOpen(true);
+  };
+
+  // Finalize import after user confirms
+  const handleConfirmImport = () => {
+    if (isImporting) return;
+    if (selectedContacts.size === 0) {
+      toastError('No eligible contacts selected.', 'Selection Empty');
+      setIsConfirmModalOpen(false);
       return;
     }
 
-    let duplicateCount = 0;
-    const newRecipients: UnifiedWhatsAppRecipient[] = [];
+    setIsImporting(true);
+    try {
+      let duplicateCount = 0;
+      let ineligibleSkipped = 0;
+      const seenBatchPhones = new Set<string>();
+      const newRecipients: UnifiedWhatsAppRecipient[] = [];
 
-    selectedContacts.forEach((contact) => {
-      const normalized = normalizePhoneNumber(contact.whatsapp_number);
+      selectedContacts.forEach((contact) => {
+        if (!isContactEligible(contact).eligible) {
+          ineligibleSkipped++;
+          return;
+        }
 
-      if (existingPhones.has(normalized)) {
-        duplicateCount++;
-        return;
-      }
+        const normalized = normalizePhoneNumber(contact.whatsapp_number);
+        if (!normalized) {
+          ineligibleSkipped++;
+          return;
+        }
 
-      const details = contact.contact_details || {};
-      const name =
-        details.name ||
-        details.contact_name ||
-        (details.first_name ? `${details.first_name} ${details.last_name || ''}`.trim() : null) ||
-        contact.custom_variables?.name ||
-        contact.custom_variables?.first_name;
+        if (existingPhones.has(normalized) || seenBatchPhones.has(normalized)) {
+          duplicateCount++;
+          return;
+        }
+        seenBatchPhones.add(normalized);
 
-      const rawVars: Record<string, string> = {
-        phone: normalized,
-        whatsapp_number: contact.whatsapp_number || normalized,
-        contact_id: String(contact.contact_id ?? ''),
-        ...(name ? { name, customer_name: name, original_name: name } : {}),
-      };
+        const details = contact.contact_details || {};
+        const name =
+          details.name ||
+          details.contact_name ||
+          (details.first_name
+            ? `${details.first_name} ${details.last_name || ''}`.trim()
+            : null) ||
+          contact.custom_variables?.name ||
+          contact.custom_variables?.first_name;
 
-      if (contact.custom_variables && typeof contact.custom_variables === 'object') {
-        Object.entries(contact.custom_variables).forEach(([k, v]) => {
-          rawVars[k] = typeof v === 'object' ? JSON.stringify(v) : String(v ?? '');
+        const rawVars: Record<string, string> = {
+          phone: normalized,
+          whatsapp_number: contact.whatsapp_number || normalized,
+          contact_id: String(contact.contact_id ?? ''),
+          ...(name ? { name, customer_name: name, original_name: name } : {}),
+        };
+
+        if (contact.custom_variables && typeof contact.custom_variables === 'object') {
+          Object.entries(contact.custom_variables).forEach(([k, v]) => {
+            rawVars[k] = typeof v === 'object' ? JSON.stringify(v) : String(v ?? '');
+          });
+        }
+
+        newRecipients.push({
+          id: `contact_${getContactKey(contact)}_${Date.now()}`,
+          phone: normalized,
+          formattedPhone: contact.whatsapp_number,
+          name: name || undefined,
+          source: 'whatsapp_contacts',
+          contact_id: contact.contact_id,
+          status: 'valid',
+          whatsapp_opt_in: true,
+          opt_in_status: contact.opt_in_status,
+          tags: contact.tags,
+          groups: contact.groups,
+          raw: rawVars,
         });
-      }
-
-      newRecipients.push({
-        id: `contact_${contact.id ?? contact._id ?? contact.contact_id}_${Date.now()}`,
-        phone: normalized,
-        formattedPhone: contact.whatsapp_number,
-        name: name || undefined,
-        source: 'whatsapp_contacts',
-        contact_id: contact.contact_id,
-        status: 'valid',
-        whatsapp_opt_in: true,
-        opt_in_status: contact.opt_in_status,
-        tags: contact.tags,
-        groups: contact.groups,
-        raw: rawVars,
       });
-    });
 
-    onImportSelected(newRecipients);
-    toastSuccess(
-      `Imported ${newRecipients.length} contact(s) to audience.${
-        duplicateCount > 0 ? ` (${duplicateCount} duplicate(s) skipped)` : ''
-      }`,
-      'Contacts Imported'
-    );
-    onClose();
+      onImportSelected(newRecipients);
+
+      const skippedParts: string[] = [];
+      if (duplicateCount > 0) skippedParts.push(`${duplicateCount} duplicate(s) skipped`);
+      if (ineligibleSkipped > 0) skippedParts.push(`${ineligibleSkipped} ineligible skipped`);
+
+      toastSuccess(
+        `Imported ${newRecipients.length.toLocaleString()} contact(s) from ${selectedGridCount} grid(s).${
+          skippedParts.length > 0 ? ` (${skippedParts.join(', ')})` : ''
+        }`,
+        'Contacts Imported'
+      );
+      setIsConfirmModalOpen(false);
+      onClose();
+    } finally {
+      setIsImporting(false);
+    }
   };
 
-  // Helper to generate numbered page array with ellipsis
-  const pageNumbers = useMemo(() => {
-    const total = pagination.pages || 1;
-    const current = pagination.page || 1;
-
-    if (total <= 7) {
-      return Array.from({ length: total }, (_, i) => i + 1);
-    }
-
-    if (current <= 4) {
-      return [1, 2, 3, 4, 5, 'ellipsis', total];
-    }
-
-    if (current >= total - 3) {
-      return [1, 'ellipsis', total - 4, total - 3, total - 2, total - 1, total];
-    }
-
-    return [1, 'ellipsis', current - 1, current, current + 1, 'ellipsis', total];
-  }, [pagination.pages, pagination.page]);
-
   if (!isOpen) return null;
+
+  const ineligibleFilteredOut = Math.max(0, totalDirectoryContacts - eligibleContacts.length);
 
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
@@ -328,7 +383,7 @@ export default function WhatsAppContactsPickerModal({
                 Import from WhatsApp Contacts
               </h3>
               <p className="text-xs text-slate-500">
-                Select verified opted-in recipients from your directory to include in this campaign
+                Select one or more eligible contact batches to include in this campaign
               </p>
             </div>
           </div>
@@ -336,6 +391,7 @@ export default function WhatsAppContactsPickerModal({
             type="button"
             onClick={onClose}
             className="p-2 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
+            aria-label="Close modal"
           >
             <X className="w-5 h-5" />
           </button>
@@ -353,7 +409,7 @@ export default function WhatsAppContactsPickerModal({
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
-                    handleApplyFilter();
+                    fetchAllFilteredContacts();
                   }
                 }}
                 placeholder="Search by phone number or contact name..."
@@ -364,9 +420,7 @@ export default function WhatsAppContactsPickerModal({
             {/* Opt-In Filter */}
             <select
               value={optInFilter}
-              onChange={(e) => {
-                setOptInFilter(e.target.value);
-              }}
+              onChange={(e) => setOptInFilter(e.target.value)}
               className="px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
             >
               <option value="all">Opt-In: All</option>
@@ -380,6 +434,11 @@ export default function WhatsAppContactsPickerModal({
               type="text"
               value={tagFilter}
               onChange={(e) => setTagFilter(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  fetchAllFilteredContacts();
+                }
+              }}
               placeholder="Tag (e.g. vip)..."
               className="w-full sm:w-32 px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
             />
@@ -387,345 +446,204 @@ export default function WhatsAppContactsPickerModal({
             {/* Apply & Refresh */}
             <button
               type="button"
-              onClick={handleApplyFilter}
-              className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-xs transition-colors"
+              onClick={fetchAllFilteredContacts}
+              disabled={isLoading}
+              className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-xs transition-colors disabled:opacity-50"
             >
               Filter
             </button>
             <button
               type="button"
-              onClick={() => fetchContacts(pagination.page, pagination.limit)}
-              className="p-2 rounded-xl bg-white border border-slate-200 hover:bg-slate-100 text-slate-600 transition-colors"
-              title="Refresh"
+              onClick={fetchAllFilteredContacts}
+              disabled={isLoading}
+              className="p-2 rounded-xl bg-white border border-slate-200 hover:bg-slate-100 text-slate-600 transition-colors disabled:opacity-50"
+              title="Refresh contacts"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin text-emerald-600' : ''}`} />
             </button>
           </div>
-
-          {/* Selection Status Bar */}
-          <div className="flex flex-wrap items-center justify-between text-xs pt-1 gap-2">
-            <div className="flex items-center gap-3">
-              <span className="text-slate-600">
-                <strong className="text-emerald-700 font-bold">{selectedContacts.size}</strong> contact(s) selected
-              </span>
-              {eligibleOnCurrentPage.length > 0 && (
-                <button
-                  type="button"
-                  onClick={handleToggleSelectAllPage}
-                  className="text-xs font-semibold text-emerald-600 hover:underline flex items-center gap-1"
-                >
-                  {areAllCurrentPageEligibleSelected
-                    ? 'Deselect all on this page'
-                    : `Select all eligible on page (${eligibleOnCurrentPage.length})`}
-                </button>
-              )}
-            </div>
-
-            {selectedContacts.size > 0 && (
-              <button
-                type="button"
-                onClick={handleClearSelection}
-                className="text-xs font-semibold text-rose-600 hover:underline"
-              >
-                Clear All Selected
-              </button>
-            )}
-          </div>
         </div>
 
-        {/* Contacts Table */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+        {/* Selection Summary & Grid Area */}
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
           {isLoading ? (
             <div className="py-20 flex flex-col items-center justify-center text-center space-y-3">
               <Loader2 className="w-8 h-8 text-emerald-600 animate-spin" />
-              <p className="text-xs font-medium text-slate-500">Loading directory contacts...</p>
+              <p className="text-xs font-medium text-slate-500">
+                {loadProgress || 'Loading eligible WhatsApp contacts...'}
+              </p>
             </div>
           ) : loadError ? (
             <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-start gap-2.5">
               <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
               <div className="flex-1 font-medium">{loadError}</div>
             </div>
-          ) : contacts.length === 0 ? (
+          ) : eligibleContacts.length === 0 ? (
             <div className="py-16 text-center">
               <Users className="w-10 h-10 text-slate-300 mx-auto mb-2" />
-              <p className="text-sm font-semibold text-slate-700">No contacts found</p>
+              <p className="text-sm font-semibold text-slate-700">No eligible contacts found</p>
               <p className="text-xs text-slate-400 mt-1">
-                Try adjusting your search query or filters.
+                Try adjusting your search query, opt-in status, or tag filters.
               </p>
             </div>
           ) : (
-            <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
-                    <tr>
-                      <th className="py-3 px-3.5 w-10 text-center">
-                        <input
-                          type="checkbox"
-                          checked={areAllCurrentPageEligibleSelected}
-                          onChange={handleToggleSelectAllPage}
-                          disabled={eligibleOnCurrentPage.length === 0}
-                          className="w-4 h-4 rounded text-emerald-600 border-slate-300 focus:ring-emerald-500 cursor-pointer disabled:opacity-40"
-                          title="Select all eligible on this page"
-                        />
-                      </th>
-                      <th className="py-3 px-3">Contact</th>
-                      <th className="py-3 px-3">WhatsApp Number</th>
-                      <th className="py-3 px-3">Opt-In Status</th>
-                      <th className="py-3 px-3">Tags &amp; Groups</th>
-                      <th className="py-3 px-3">Eligibility</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {contacts.map((c) => {
-                      const key = String(c.id ?? c._id ?? c.contact_id);
-                      const isSelected = selectedContacts.has(key);
-                      const eligibility = isContactEligible(c);
-                      const isEligible = eligibility.eligible;
-                      const details = c.contact_details || {};
-                      const contactName =
-                        details.name ||
-                        details.contact_name ||
-                        (details.first_name ? `${details.first_name} ${details.last_name || ''}`.trim() : null) ||
-                        c.custom_variables?.name ||
-                        c.custom_variables?.first_name ||
-                        '—';
-
-                      return (
-                        <tr
-                          key={key}
-                          onClick={() => {
-                            if (isEligible) handleToggleSelect(c);
-                          }}
-                          className={`transition-colors ${
-                            !isEligible
-                              ? 'bg-slate-50/50 opacity-60 cursor-not-allowed'
-                              : isSelected
-                              ? 'bg-emerald-50/60 cursor-pointer'
-                              : 'hover:bg-slate-50 cursor-pointer'
-                          }`}
-                        >
-                          {/* Checkbox */}
-                          <td className="py-2.5 px-3.5 text-center" onClick={(e) => e.stopPropagation()}>
-                            <input
-                              type="checkbox"
-                              checked={isSelected}
-                              disabled={!isEligible}
-                              onChange={() => handleToggleSelect(c)}
-                              className="w-4 h-4 rounded text-emerald-600 border-slate-300 focus:ring-emerald-500 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-                            />
-                          </td>
-
-                          {/* Contact Info */}
-                          <td className="py-2.5 px-3">
-                            <div className="font-semibold text-slate-800">{contactName}</div>
-                            {c.contact_id && (
-                              <div className="text-[10px] text-slate-400 font-mono">
-                                ID: #{c.contact_id}
-                              </div>
-                            )}
-                          </td>
-
-                          {/* WhatsApp Phone */}
-                          <td className="py-2.5 px-3 font-mono text-slate-700">
-                            {c.whatsapp_number}
-                          </td>
-
-                          {/* Opt-In Status */}
-                          <td className="py-2.5 px-3">
-                            {isEligible ? (
-                              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                                <ShieldCheck className="w-3 h-3 text-emerald-600" />
-                                Opted In
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
-                                <ShieldAlert className="w-3 h-3 text-amber-600" />
-                                {c.opt_in_status || 'Pending'}
-                              </span>
-                            )}
-                          </td>
-
-                          {/* Tags & Groups */}
-                          <td className="py-2.5 px-3">
-                            <div className="flex flex-wrap gap-1 max-w-xs">
-                              {Array.isArray(c.tags) &&
-                                c.tags.slice(0, 2).map((t) => (
-                                  <span
-                                    key={t}
-                                    className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded-md"
-                                  >
-                                    #{t}
-                                  </span>
-                                ))}
-                              {Array.isArray(c.groups) &&
-                                c.groups.slice(0, 2).map((g) => (
-                                  <span
-                                    key={g}
-                                    className="text-[10px] bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded-md"
-                                  >
-                                    {g}
-                                  </span>
-                                ))}
-                            </div>
-                          </td>
-
-                          {/* Eligibility Status */}
-                          <td className="py-2.5 px-3">
-                            {isEligible ? (
-                              <span className="text-[11px] font-semibold text-emerald-600 flex items-center gap-1">
-                                <CheckCircle2 className="w-3.5 h-3.5" />
-                                Eligible
-                              </span>
-                            ) : (
-                              <span className="text-[11px] font-medium text-rose-600 flex items-center gap-1" title={eligibility.reason}>
-                                <AlertCircle className="w-3.5 h-3.5" />
-                                {eligibility.reason || 'Ineligible'}
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Modal Footer with Rich Pagination & Action Buttons */}
-        <div className="px-6 py-4 bg-slate-50/70 border-t border-slate-100 flex flex-col lg:flex-row items-center justify-between gap-4">
-          {/* Pagination Navigation & Info */}
-          <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600 w-full lg:w-auto justify-between sm:justify-start">
-            {/* Showing items text */}
-            <span className="font-medium text-slate-500">
-              Showing{' '}
-              <strong className="text-slate-800">
-                {pagination.total === 0 ? 0 : (pagination.page - 1) * pagination.limit + 1}
-              </strong>
-              –
-              <strong className="text-slate-800">
-                {Math.min(pagination.page * pagination.limit, pagination.total)}
-              </strong>{' '}
-              of <strong className="text-slate-800">{pagination.total}</strong>
-            </span>
-
-            {/* Rows Per Page Selector */}
-            <div className="flex items-center gap-1.5 sm:pl-2 sm:border-l sm:border-slate-200">
-              <span className="text-[11px] text-slate-400">Rows:</span>
-              <select
-                value={pagination.limit}
-                onChange={(e) => handleLimitChange(Number(e.target.value))}
-                className="px-2 py-1 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
-              >
-                <option value={10}>10</option>
-                <option value={100}>100</option>
-                <option value={500}>500</option>
-                <option value={1000}>1000</option>
-              </select>
-            </div>
-
-            {/* Page Navigation Controls */}
-            <div className="flex items-center gap-1 sm:pl-2 sm:border-l sm:border-slate-200">
-              {/* First Page button */}
-              <button
-                type="button"
-                disabled={pagination.page <= 1 || isLoading}
-                onClick={() => goToPage(1)}
-                className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed text-slate-600 transition-colors"
-                title="Go to first page"
-              >
-                <ChevronsLeft className="w-3.5 h-3.5" />
-              </button>
-
-              {/* Prev Page button */}
-              <button
-                type="button"
-                disabled={pagination.page <= 1 || isLoading}
-                onClick={() => goToPage(pagination.page - 1)}
-                className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed text-slate-600 transition-colors"
-                title="Go to previous page"
-              >
-                <ChevronLeft className="w-3.5 h-3.5" />
-              </button>
-
-              {/* Numbered Page Buttons */}
-              <div className="flex items-center gap-1">
-                {pageNumbers.map((p, idx) => {
-                  if (p === 'ellipsis') {
-                    return (
-                      <span key={`ellipsis-${idx}`} className="px-1 text-slate-400 font-bold select-none">
-                        ...
+            <>
+              {/* Selection Summary Bar */}
+              <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs">
+                  <div>
+                    <span className="text-slate-500">Total eligible contacts: </span>
+                    <strong className="text-slate-900 font-bold">
+                      {eligibleContacts.length.toLocaleString()}
+                    </strong>
+                    {ineligibleFilteredOut > 0 && (
+                      <span className="text-[11px] text-slate-400 ml-1">
+                        ({ineligibleFilteredOut.toLocaleString()} ineligible excluded)
                       </span>
-                    );
-                  }
-                  const pageNum = p as number;
-                  const isCurrent = pageNum === pagination.page;
+                    )}
+                  </div>
+                  <div>
+                    <span className="text-slate-500">Selected grids: </span>
+                    <strong className="text-emerald-700 font-bold">{selectedGridCount}</strong>
+                  </div>
+                  <div>
+                    <span className="text-slate-500">Selected contacts: </span>
+                    <strong className="text-emerald-700 font-bold">
+                      {selectedContacts.size.toLocaleString()}
+                    </strong>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3 self-end sm:self-auto">
+                  <div className="flex items-center gap-1.5 text-xs">
+                    <span className="text-[11px] text-slate-500">Batch size:</span>
+                    <select
+                      value={batchSize}
+                      onChange={(e) => setBatchSize(Number(e.target.value))}
+                      className="px-2 py-1 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
+                    >
+                      <option value={250}>250</option>
+                      <option value={500}>500</option>
+                      <option value={1000}>1000</option>
+                    </select>
+                  </div>
+
+                  {selectedContacts.size > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleClearSelection}
+                      className="text-xs font-semibold text-rose-600 hover:underline whitespace-nowrap"
+                    >
+                      Clear Selection
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Responsive Grid Selector */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3.5">
+                {grids.map((grid) => {
+                  const selected = isGridSelected(grid);
                   return (
                     <button
-                      key={pageNum}
+                      key={`grid-${grid.gridNumber}-${grid.start}-${grid.end}`}
                       type="button"
-                      disabled={isLoading}
-                      onClick={() => goToPage(pageNum)}
-                      className={`min-w-[28px] h-7 px-2 rounded-lg text-xs font-semibold transition-all ${
-                        isCurrent
-                          ? 'bg-emerald-600 text-white shadow-xs font-bold'
-                          : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                      onClick={() => handleToggleGrid(grid)}
+                      aria-pressed={selected}
+                      className={`group relative text-left p-4 rounded-2xl transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-emerald-500/40 ${
+                        selected
+                          ? 'bg-emerald-50 border-2 border-emerald-500 text-emerald-950 shadow-sm'
+                          : 'bg-white border border-slate-200 hover:border-emerald-300 hover:bg-emerald-50/30 text-slate-800'
                       }`}
-                      title={`Go to page ${pageNum}`}
                     >
-                      {pageNum}
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`w-7 h-7 rounded-xl flex items-center justify-center text-xs font-bold ${
+                              selected
+                                ? 'bg-emerald-600 text-white'
+                                : 'bg-slate-100 text-slate-600 group-hover:bg-emerald-100 group-hover:text-emerald-700'
+                            }`}
+                          >
+                            <Layers className="w-3.5 h-3.5" />
+                          </span>
+                          <span
+                            className={`text-sm font-bold ${
+                              selected ? 'text-emerald-900' : 'text-slate-900'
+                            }`}
+                          >
+                            Grid {grid.gridNumber}
+                          </span>
+                        </div>
+
+                        {selected ? (
+                          <span className="w-6 h-6 rounded-full bg-emerald-600 text-white flex items-center justify-center shadow-xs">
+                            <Check className="w-3.5 h-3.5 stroke-[3]" />
+                          </span>
+                        ) : (
+                          <span className="w-6 h-6 rounded-full border border-slate-300 bg-white group-hover:border-emerald-400 transition-colors" />
+                        )}
+                      </div>
+
+                      <div className="mt-3 space-y-1">
+                        <p
+                          className={`text-xs font-medium ${
+                            selected ? 'text-emerald-800' : 'text-slate-600'
+                          }`}
+                        >
+                          Contacts {grid.start.toLocaleString()}–{grid.end.toLocaleString()}
+                        </p>
+                        <p
+                          className={`text-sm font-extrabold ${
+                            selected ? 'text-emerald-700' : 'text-slate-900'
+                          }`}
+                        >
+                          {grid.contacts.length.toLocaleString()} Contacts
+                        </p>
+                      </div>
+
+                      <div className="mt-3 pt-2.5 border-t border-slate-200/70 flex items-center justify-between text-[11px]">
+                        <span
+                          className={`font-semibold flex items-center gap-1 ${
+                            selected ? 'text-emerald-700' : 'text-slate-400 group-hover:text-emerald-600'
+                          }`}
+                        >
+                          {selected ? (
+                            <>
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              Selected
+                            </>
+                          ) : (
+                            'Click to select'
+                          )}
+                        </span>
+                      </div>
                     </button>
                   );
                 })}
               </div>
+            </>
+          )}
+        </div>
 
-              {/* Next Page button */}
-              <button
-                type="button"
-                disabled={pagination.page >= (pagination.pages || 1) || isLoading}
-                onClick={() => goToPage(pagination.page + 1)}
-                className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed text-slate-600 transition-colors"
-                title="Go to next page"
-              >
-                <ChevronRight className="w-3.5 h-3.5" />
-              </button>
-
-              {/* Last Page button */}
-              <button
-                type="button"
-                disabled={pagination.page >= (pagination.pages || 1) || isLoading}
-                onClick={() => goToPage(pagination.pages || 1)}
-                className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed text-slate-600 transition-colors"
-                title="Go to last page"
-              >
-                <ChevronsRight className="w-3.5 h-3.5" />
-              </button>
-
-              {/* Quick Jump Dropdown if more than 3 pages */}
-              {(pagination.pages || 1) > 3 && (
-                <div className="hidden md:flex items-center gap-1 ml-1.5">
-                  <span className="text-[11px] text-slate-400">Jump:</span>
-                  <select
-                    value={pagination.page}
-                    onChange={(e) => goToPage(Number(e.target.value))}
-                    disabled={isLoading}
-                    className="px-1.5 py-0.5 bg-white border border-slate-200 rounded-md text-xs font-semibold text-slate-700 focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
-                  >
-                    {Array.from({ length: pagination.pages }, (_, i) => i + 1).map((pg) => (
-                      <option key={pg} value={pg}>
-                        {pg}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-            </div>
+        {/* Modal Footer */}
+        <div className="px-6 py-4 bg-slate-50/70 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-3">
+          <div className="text-xs text-slate-500">
+            {selectedContacts.size > 0 ? (
+              <span>
+                Ready to import{' '}
+                <strong className="text-emerald-700 font-bold">
+                  {selectedContacts.size.toLocaleString()}
+                </strong>{' '}
+                eligible contact(s) from{' '}
+                <strong className="text-slate-800">{selectedGridCount}</strong> grid(s).
+              </span>
+            ) : (
+              <span>Select one or more contact grids above to import.</span>
+            )}
           </div>
 
-          {/* Action Buttons: Cancel and Import */}
-          <div className="flex items-center gap-2 self-end lg:self-auto flex-shrink-0">
+          <div className="flex items-center gap-2 self-end sm:self-auto flex-shrink-0">
             <button
               type="button"
               onClick={onClose}
@@ -735,8 +653,8 @@ export default function WhatsAppContactsPickerModal({
             </button>
             <button
               type="button"
-              disabled={selectedContacts.size === 0}
-              onClick={handleConfirmImport}
+              disabled={selectedContacts.size === 0 || isLoading || isImporting}
+              onClick={handleOpenImportConfirm}
               className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-md shadow-emerald-500/20 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 transition-all"
             >
               <span>Import Selected ({selectedContacts.size})</span>
@@ -745,6 +663,49 @@ export default function WhatsAppContactsPickerModal({
           </div>
         </div>
       </div>
+
+      {/* Import Confirmation Dialog */}
+      {isConfirmModalOpen && (
+        <div className="fixed inset-0 z-[60] overflow-y-auto bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+          <div className="relative w-full max-w-sm bg-white rounded-3xl shadow-2xl border border-slate-100 p-6 space-y-4">
+            <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto">
+              <ShieldCheck className="w-6 h-6" />
+            </div>
+
+            <div className="text-center space-y-1.5">
+              <h4 className="text-base font-bold text-slate-900">Confirm Contact Import</h4>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                Import{' '}
+                <span className="font-bold text-emerald-700">
+                  {selectedContacts.size.toLocaleString()}
+                </span>{' '}
+                eligible contact(s) from{' '}
+                <span className="font-semibold text-slate-800">{selectedGridCount}</span>{' '}
+                selected grid(s) into your campaign audience?
+              </p>
+            </div>
+
+            <div className="flex items-center justify-center gap-3 pt-2">
+              <button
+                type="button"
+                disabled={isImporting}
+                onClick={() => setIsConfirmModalOpen(false)}
+                className="flex-1 px-4 py-2.5 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isImporting}
+                onClick={handleConfirmImport}
+                className="flex-1 px-4 py-2.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-md shadow-emerald-500/20 transition-all disabled:opacity-50"
+              >
+                {isImporting ? 'Importing...' : 'Confirm Import'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

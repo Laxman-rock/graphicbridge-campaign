@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import DashboardHeader from '@/components/layout/DashboardHeader';
 import Sidebar from '@/components/layout/Sidebar';
 import SettingsModal from '@/components/layout/SettingsModal';
@@ -8,6 +8,7 @@ import WhatsAppCampaignWizard from '@/components/whatsapp/WhatsAppCampaignWizard
 import WhatsAppCampaignsList from '@/components/whatsapp/WhatsAppCampaignsList';
 import WhatsAppTemplateManager from '@/components/whatsapp/WhatsAppTemplateManager';
 import WhatsAppConfigModal from '@/components/whatsapp/WhatsAppConfigModal';
+import { WhatsAppTemplate } from '@/types/whatsapp';
 import { Send, History, MessageSquare, Settings, AlertTriangle } from 'lucide-react';
 
 type WhatsAppTab = 'wizard' | 'history' | 'templates';
@@ -21,9 +22,38 @@ const TAB_LABELS: Record<WhatsAppTab, string> = {
 export default function WhatsAppCampaignPage() {
   const [activeTab, setActiveTab] = useState<WhatsAppTab>('wizard');
   const [pendingTab, setPendingTab] = useState<WhatsAppTab | null>(null);
+  const [preselectedTemplate, setPreselectedTemplate] = useState<WhatsAppTemplate | null>(null);
+  const [preselectedTemplateId, setPreselectedTemplateId] = useState<string | null>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
+
+  // Restore tab & preselected templateId from URL query parameters on mount / refresh
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const tabParam = params.get('tab') as WhatsAppTab | null;
+    const templateIdParam = params.get('templateId');
+
+    if (templateIdParam) {
+      setPreselectedTemplateId(templateIdParam);
+      setActiveTab('wizard');
+    } else if (tabParam && (tabParam === 'wizard' || tabParam === 'history' || tabParam === 'templates')) {
+      setActiveTab(tabParam);
+    }
+  }, []);
+
+  const updateUrlParams = (tab: WhatsAppTab, templateId?: string | null) => {
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    url.searchParams.set('tab', tab);
+    if (templateId) {
+      url.searchParams.set('templateId', templateId);
+    } else {
+      url.searchParams.delete('templateId');
+    }
+    window.history.replaceState({}, '', url.toString());
+  };
 
   const handleTabClick = (tab: WhatsAppTab) => {
     if (tab === activeTab) return;
@@ -33,7 +63,25 @@ export default function WhatsAppCampaignPage() {
   const confirmTabSwitch = () => {
     if (!pendingTab) return;
     setActiveTab(pendingTab);
+    updateUrlParams(pendingTab, pendingTab === 'wizard' ? preselectedTemplateId : null);
     setPendingTab(null);
+  };
+
+  const handleUseTemplate = (template: WhatsAppTemplate) => {
+    const stableId = String(
+      template.template_id || template._id || template.id || template.name
+    );
+    setPreselectedTemplate(template);
+    setPreselectedTemplateId(stableId);
+    setActiveTab('wizard');
+    updateUrlParams('wizard', stableId);
+  };
+
+  const handleCampaignCreated = () => {
+    setPreselectedTemplate(null);
+    setPreselectedTemplateId(null);
+    setActiveTab('history');
+    updateUrlParams('history', null);
   };
 
   return (
@@ -116,13 +164,20 @@ export default function WhatsAppCampaignPage() {
 
         {/* Tab Content */}
         {activeTab === 'wizard' && (
-          <WhatsAppCampaignWizard onCampaignCreated={() => setActiveTab('history')} />
+          <WhatsAppCampaignWizard
+            preselectedTemplate={preselectedTemplate}
+            preselectedTemplateId={preselectedTemplateId}
+            onCampaignCreated={handleCampaignCreated}
+          />
         )}
 
         {activeTab === 'history' && <WhatsAppCampaignsList />}
 
         {activeTab === 'templates' && (
-          <WhatsAppTemplateManager onOpenConfigModal={() => setIsConfigModalOpen(true)} />
+          <WhatsAppTemplateManager
+            onOpenConfigModal={() => setIsConfigModalOpen(true)}
+            onUseTemplate={handleUseTemplate}
+          />
         )}
       </div>
 

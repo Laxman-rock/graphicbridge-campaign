@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   MessageSquare,
   Send,
@@ -67,10 +67,14 @@ function renderHighlightedTemplateBody(text: string) {
 }
 
 interface WhatsAppCampaignWizardProps {
+  preselectedTemplate?: WhatsAppTemplate | null;
+  preselectedTemplateId?: string | null;
   onCampaignCreated?: () => void;
 }
 
 export default function WhatsAppCampaignWizard({
+  preselectedTemplate,
+  preselectedTemplateId,
   onCampaignCreated,
 }: WhatsAppCampaignWizardProps) {
   const { error: toastError, success: toastSuccess, info: toastInfo } = useToast();
@@ -107,6 +111,7 @@ export default function WhatsAppCampaignWizard({
   const [isLoadingTemplates, setIsLoadingTemplates] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [selectedTemplateName, setSelectedTemplateName] = useState<string>('');
+  const [preselectionError, setPreselectionError] = useState<string | null>(null);
   const [headerImgError, setHeaderImgError] = useState(false);
 
   // Variables mapping: for each variable in template body (e.g. '1', '2') -> { type: 'column' | 'static', value: string }
@@ -125,13 +130,28 @@ export default function WhatsAppCampaignWizard({
 
   // Submission State
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const isSubmittingRef = useRef(false);
+  const executionKeyRef = useRef<{ signature: string; key: string } | null>(null);
+  const lastDispatchedSignatureRef = useRef<string | null>(null);
   const [createdResult, setCreatedResult] = useState<any>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  const matchesTemplateIdentifier = (tmpl: WhatsAppTemplate, identifier: string) => {
+    const target = identifier.trim();
+    if (!target) return false;
+    return (
+      String(tmpl.template_id ?? '') === target ||
+      String(tmpl._id ?? '') === target ||
+      String(tmpl.id ?? '') === target ||
+      String(tmpl.name ?? '') === target
+    );
+  };
 
   // Load approved templates on mount: Prefer live Meta WhatsApp templates (GET /whatsapp/templates/meta)
   useEffect(() => {
     async function loadTemplates() {
       setIsLoadingTemplates(true);
+      setPreselectionError(null);
       try {
         // Requirement 1: Fetch actual Meta WhatsApp template objects using GET /whatsapp/templates/meta
         let res = await listMetaWhatsAppTemplates();
@@ -148,7 +168,7 @@ export default function WhatsAppCampaignWizard({
         }
 
         // Display ONLY active templates with status: "APPROVED"
-        const approved = loaded
+        let approved = loaded
           ? loaded.filter(
               (t) =>
                 (t.status || '').toUpperCase() === 'APPROVED' &&
@@ -156,17 +176,61 @@ export default function WhatsAppCampaignWizard({
             )
           : [];
 
-        if (approved.length > 0) {
-          setTemplates(approved);
-          setSelectedTemplateName(approved[0].name);
-        } else {
-          // Fallback to approved starter presets if no approved templates found in Meta account
-          const approvedPresets = WHATSAPP_PRESET_TEMPLATES.filter(
-            (t) => (t.status || '').toUpperCase() === 'APPROVED'
+        // If no Meta/synced templates loaded, fall back to approved starter presets
+        if (approved.length === 0) {
+          approved = WHATSAPP_PRESET_TEMPLATES.filter(
+            (t) => (t.status || '').toUpperCase() === 'APPROVED' && t.is_active !== false
           );
-          setTemplates(approvedPresets);
-          if (approvedPresets.length > 0) {
-            setSelectedTemplateName(approvedPresets[0].name);
+        }
+
+        const requestedId =
+          preselectedTemplateId ||
+          (preselectedTemplate
+            ? String(
+                preselectedTemplate.template_id ||
+                  preselectedTemplate._id ||
+                  preselectedTemplate.id ||
+                  preselectedTemplate.name
+              )
+            : null);
+
+        if (requestedId) {
+          let matched = approved.find((t) => matchesTemplateIdentifier(t, requestedId));
+
+          // Also check starter presets if the user clicked Use Template on a preset
+          if (!matched) {
+            const presetMatch = WHATSAPP_PRESET_TEMPLATES.find(
+              (t) =>
+                matchesTemplateIdentifier(t, requestedId) &&
+                (t.status || '').toUpperCase() === 'APPROVED' &&
+                t.is_active !== false
+            );
+            if (presetMatch) {
+              approved = [presetMatch, ...approved.filter((t) => t.name !== presetMatch.name)];
+              matched = presetMatch;
+            }
+          }
+
+          setTemplates(approved);
+
+          if (matched) {
+            setMode('template');
+            setMessageType('template');
+            setSelectedTemplateName(matched.name);
+            if (matched.language) setLanguageCode(matched.language);
+            setPreselectionError(null);
+          } else {
+            // Do not silently select a different template if the requested one is unavailable or ineligible
+            setSelectedTemplateName('');
+            const errMsg =
+              'The selected template is no longer active or approved for campaigns. Please choose another template.';
+            setPreselectionError(errMsg);
+            toastError(errMsg, 'Template Unavailable');
+          }
+        } else {
+          setTemplates(approved);
+          if (approved.length > 0) {
+            setSelectedTemplateName(approved[0].name);
           }
         }
       } catch {
@@ -174,7 +238,21 @@ export default function WhatsAppCampaignWizard({
           (t) => (t.status || '').toUpperCase() === 'APPROVED'
         );
         setTemplates(approvedPresets);
-        if (approvedPresets.length > 0) {
+        if (preselectedTemplateId) {
+          const matchedPreset = approvedPresets.find((t) =>
+            matchesTemplateIdentifier(t, preselectedTemplateId)
+          );
+          if (matchedPreset) {
+            setMode('template');
+            setMessageType('template');
+            setSelectedTemplateName(matchedPreset.name);
+          } else {
+            setSelectedTemplateName('');
+            setPreselectionError(
+              'The selected template could not be verified. Please choose another template.'
+            );
+          }
+        } else if (approvedPresets.length > 0) {
           setSelectedTemplateName(approvedPresets[0].name);
         }
       } finally {
@@ -182,7 +260,8 @@ export default function WhatsAppCampaignWizard({
       }
     }
     loadTemplates();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preselectedTemplateId, preselectedTemplate]);
 
   // Quick sync from Meta inside wizard
   const handleQuickSync = async () => {
@@ -366,7 +445,19 @@ export default function WhatsAppCampaignWizard({
       return true;
     });
 
-    return eligibleRecords.map((rec) => {
+    // Deduplicate recipients by normalized phone number to prevent sending the same template twice in one execution
+    const seenPhones = new Set<string>();
+    const uniqueEligibleRecords = eligibleRecords.filter((rec) => {
+      const rawPhone = String(rec.formattedPhone || rec.phone || '').trim();
+      const canonical = rawPhone.replace(/[\s\-().]/g, '').replace(/^\+/, '');
+      if (!canonical || seenPhones.has(canonical)) {
+        return false;
+      }
+      seenPhones.add(canonical);
+      return true;
+    });
+
+    return uniqueEligibleRecords.map((rec) => {
       const recipientVars: Record<string, string> = {};
 
       if (mode === 'template') {
@@ -466,6 +557,8 @@ export default function WhatsAppCampaignWizard({
 
   // Submit Campaign to Backend API
   const handleLaunchCampaign = async () => {
+    if (isSubmittingRef.current) return;
+
     if (!campaignName.trim()) {
       toastError('Campaign name is required.', 'Missing Campaign Name');
       return;
@@ -540,6 +633,36 @@ export default function WhatsAppCampaignWizard({
       }
     }
 
+    const execSignature = JSON.stringify({
+      mode,
+      template: mode === 'template' ? selectedTemplate?.name : 'custom_message',
+      language: languageCode.trim() || 'en',
+      content: mode === 'custom' ? customText : undefined,
+      phones: recipients.map((r) => r.phone).sort(),
+    });
+
+    if (lastDispatchedSignatureRef.current === execSignature) {
+      toastError(
+        'This exact campaign has already been dispatched. Start a new campaign or modify recipients/template to send again.',
+        'Duplicate Dispatch Prevented'
+      );
+      return;
+    }
+
+    if (!executionKeyRef.current || executionKeyRef.current.signature !== execSignature) {
+      const rand =
+        typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+          ? crypto.randomUUID()
+          : `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+      executionKeyRef.current = {
+        signature: execSignature,
+        key: `wa_camp_${rand}`,
+      };
+    }
+
+    const idempotencyKey = executionKeyRef.current.key;
+
+    isSubmittingRef.current = true;
     setSubmitError(null);
     setIsSubmitting(true);
     try {
@@ -566,6 +689,7 @@ export default function WhatsAppCampaignWizard({
           template_id: templateId,
           variables: buildGlobalVariables(),
           recipients,
+          idempotency_key: idempotencyKey,
           ...(finalHeaderUrl ? { media_url: finalHeaderUrl, header_image_url: finalHeaderUrl } : {}),
         };
       } else {
@@ -579,6 +703,7 @@ export default function WhatsAppCampaignWizard({
           message_type: messageType,
           content: customText,
           recipients,
+          idempotency_key: idempotencyKey,
           ...(mediaUrl ? { media_url: mediaUrl, header_image_url: mediaUrl } : {}),
           ...(mediaCaption ? { media_caption: mediaCaption } : {}),
         };
@@ -586,6 +711,8 @@ export default function WhatsAppCampaignWizard({
 
       const res = await createWhatsAppCampaign(payload);
       if (res.success) {
+        lastDispatchedSignatureRef.current = execSignature;
+        executionKeyRef.current = null;
         setSubmitError(null);
         toastSuccess(
           res.message || `WhatsApp campaign "${campaignName}" queued successfully!`,
@@ -621,6 +748,7 @@ export default function WhatsAppCampaignWizard({
       setSubmitError(errorMsg);
       toastError(errorMsg, 'Creation Error');
     } finally {
+      isSubmittingRef.current = false;
       setIsSubmitting(false);
     }
   };
@@ -736,6 +864,26 @@ export default function WhatsAppCampaignWizard({
           </button>
         </div>
       </div>
+
+      {/* Preselected Template Banner (when arrived from Use Template) */}
+      {(preselectedTemplateId || preselectedTemplate) && selectedTemplate && step === 1 && (
+        <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+            <span>
+              Selected template:{' '}
+              <strong className="font-bold">{selectedTemplate.name}</strong> ({selectedTemplate.category} • {selectedTemplate.language}). Add recipients below and continue to configure your message.
+            </span>
+          </div>
+        </div>
+      )}
+
+      {preselectionError && (
+        <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center gap-2.5">
+          <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0" />
+          <span className="font-medium">{preselectionError}</span>
+        </div>
+      )}
 
       {/* STEP 1: AUDIENCE SELECTION (CSV, MANUAL, CONTACTS) */}
       {step === 1 && (
@@ -879,11 +1027,15 @@ export default function WhatsAppCampaignWizard({
                           value={selectedTemplateName}
                           onChange={(e) => {
                             setSelectedTemplateName(e.target.value);
+                            setPreselectionError(null);
                             const found = templates.find((t) => t.name === e.target.value);
                             if (found?.language) setLanguageCode(found.language);
                           }}
                           className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-semibold bg-white text-slate-900 focus:outline-none focus:border-emerald-500"
                         >
+                          {selectedTemplateName === '' && (
+                            <option value="">-- Select an approved template --</option>
+                          )}
                           {templates.map((tmpl) => (
                             <option key={`${tmpl.name}_${tmpl.language}`} value={tmpl.name}>
                               {tmpl.name} ({tmpl.category || 'TEMPLATE'} • {tmpl.language})

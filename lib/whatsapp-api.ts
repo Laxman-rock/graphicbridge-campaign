@@ -582,13 +582,20 @@ export async function deleteWhatsAppTemplate(id: string | number): Promise<{ suc
 export async function createWhatsAppCampaign(
   payload: CreateWhatsAppCampaignRequest
 ): Promise<CreateWhatsAppCampaignResponse> {
+  const requestConfig = {
+    timeout: 180000,
+    ...(payload.idempotency_key
+      ? { headers: { 'Idempotency-Key': payload.idempotency_key } }
+      : {}),
+  };
+
   try {
     let res;
     try {
       res = await apiClient.post<any>(
         '/api/whatsapp/campaigns',
         payload,
-        { timeout: 180000 }
+        requestConfig
       );
     } catch (err: unknown) {
       const axiosErr = err as { response?: { status?: number } };
@@ -596,7 +603,7 @@ export async function createWhatsAppCampaign(
         res = await apiClient.post<any>(
           '/whatsapp/campaigns',
           payload,
-          { timeout: 180000 }
+          requestConfig
         );
       } else {
         throw err;
@@ -752,14 +759,27 @@ export async function getWhatsAppCampaign(
 
 export async function retryWhatsAppCampaign(
   id: string | number,
-  fallbackId?: string | number
+  fallbackId?: string | number,
+  idempotencyKey?: string
 ): Promise<RetryWhatsAppCampaignResponse> {
+  const requestConfig = idempotencyKey
+    ? { headers: { 'Idempotency-Key': idempotencyKey } }
+    : undefined;
+
   const tryRetry = async (targetId: string | number) => {
     try {
-      return await apiClient.post<any>(`/api/whatsapp/campaigns/${targetId}/retry`);
+      return await apiClient.post<any>(
+        `/api/whatsapp/campaigns/${targetId}/retry`,
+        idempotencyKey ? { idempotency_key: idempotencyKey } : undefined,
+        requestConfig
+      );
     } catch (err: any) {
       if (err?.response?.status === 404 || err?.response?.status === 400) {
-        return await apiClient.post<any>(`/whatsapp/campaigns/${targetId}/retry`);
+        return await apiClient.post<any>(
+          `/whatsapp/campaigns/${targetId}/retry`,
+          idempotencyKey ? { idempotency_key: idempotencyKey } : undefined,
+          requestConfig
+        );
       }
       throw err;
     }

@@ -317,8 +317,10 @@ export default function WhatsAppCampaignsList() {
     return () => clearInterval(timer);
   }, [selectedCampaignId, campaignDetail?.status, campaignDetail?.id, campaignDetail?._id]);
 
+  const isRetryingRef = React.useRef(false);
+
   const handleRetryFailed = async (id: string | number, fallbackId?: string | number) => {
-    if (isRetrying) return;
+    if (isRetryingRef.current || isRetrying) return;
     const currentStatus = campaignDetail?.status;
     if (
       (currentStatus as string) === 'sending' ||
@@ -331,9 +333,16 @@ export default function WhatsAppCampaignsList() {
       return;
     }
 
+    if ((campaignDetail?.failed_count ?? 0) <= 0) {
+      toastError('No failed recipients remain to retry.', 'Nothing to Retry');
+      return;
+    }
+
+    isRetryingRef.current = true;
     setIsRetrying(true);
     try {
-      const res = await retryWhatsAppCampaign(id, fallbackId);
+      const retryKey = `wa_retry_${id}_${campaignDetail?.failed_count ?? 0}_${Date.now()}`;
+      const res = await retryWhatsAppCampaign(id, fallbackId, retryKey);
       if (res.success) {
         const retriedCount =
           res.retried_count ??
@@ -352,6 +361,7 @@ export default function WhatsAppCampaignsList() {
     } catch {
       toastError('Retry request failed.', 'Error');
     } finally {
+      isRetryingRef.current = false;
       setIsRetrying(false);
     }
   };

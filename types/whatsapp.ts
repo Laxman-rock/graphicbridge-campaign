@@ -155,6 +155,7 @@ export interface CreateWhatsAppCampaignRequest {
   template_id?: string;
   variables?: Record<string, string>;
   content?: string;
+  idempotency_key?: string;
 }
 
 export interface WhatsAppCampaignRecipientRecord {

@@ -19,6 +19,7 @@ interface WhatsAppBubblePreviewProps {
   headerMediaType?: 'IMAGE' | 'DOCUMENT' | 'VIDEO';
   headerMediaFilename?: string;
   mediaUnavailable?: boolean;
+  fullImage?: boolean;
   bodyText: string;
   footerText?: string;
   buttons?: Array<{
@@ -37,6 +38,7 @@ export default function WhatsAppBubblePreview({
   headerMediaType,
   headerMediaFilename,
   mediaUnavailable = false,
+  fullImage = false,
   bodyText,
   footerText,
   buttons = [],
@@ -80,7 +82,13 @@ export default function WhatsAppBubblePreview({
       <div className="bg-white rounded-2xl rounded-tl-sm shadow-sm p-3.5 space-y-2.5 relative border border-slate-200/60">
         {/* Header Component */}
         {headerMediaType === 'IMAGE' && (
-          <div className="rounded-xl overflow-hidden bg-slate-100 h-36 flex items-center justify-center border border-slate-200 relative">
+          <div
+            className={`rounded-xl overflow-hidden bg-slate-100 flex items-center justify-center border border-slate-200 relative ${
+              headerMediaUrl && !imgError && !imgLoading
+                ? 'w-full'
+                : 'h-36'
+            }`}
+          >
             {headerMediaUrl && !imgError ? (
               <>
                 {imgLoading && (
@@ -93,9 +101,9 @@ export default function WhatsAppBubblePreview({
                   src={headerMediaUrl}
                   alt="Header Media"
                   referrerPolicy="no-referrer"
-                  className={`w-full h-full object-cover transition-opacity duration-200 ${
-                    imgLoading ? 'opacity-0' : 'opacity-100'
-                  }`}
+                  className={`w-full h-auto object-contain transition-opacity duration-200 ${
+                    fullImage ? 'max-h-[420px]' : 'max-h-56'
+                  } ${imgLoading ? 'opacity-0' : 'opacity-100'}`}
                   onLoad={() => setImgLoading(false)}
                   onError={() => {
                     setImgLoading(false);
