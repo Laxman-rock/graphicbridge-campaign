@@ -47,10 +47,14 @@ import EmailPreviewModal from './EmailPreviewModal';
 
 
 interface EmailCampaignWizardProps {
+  preselectedTemplate?: EmailTemplate | null;
+  preselectedTemplateId?: string | null;
   onCampaignCreated?: () => void;
 }
 
 export default function EmailCampaignWizard({
+  preselectedTemplate,
+  preselectedTemplateId,
   onCampaignCreated,
 }: EmailCampaignWizardProps) {
   const { error: toastError, success: toastSuccess, info: toastInfo } = useToast();
@@ -110,7 +114,38 @@ export default function EmailCampaignWizard({
         const activeTemplates = res.data.filter((t) => t.status !== false);
         setTemplates(activeTemplates);
         setTemplatesError(null);
-        if (activeTemplates.length > 0) {
+
+        const requestedId =
+          preselectedTemplateId ||
+          (preselectedTemplate
+            ? String(
+                preselectedTemplate.template_id ||
+                  preselectedTemplate._id ||
+                  preselectedTemplate.id ||
+                  preselectedTemplate.name
+              )
+            : null);
+
+        if (requestedId) {
+          const matched = activeTemplates.find(
+            (t) =>
+              String(t.template_id ?? '') === requestedId ||
+              String(t._id ?? '') === requestedId ||
+              String(t.id ?? '') === requestedId ||
+              String(t.name ?? '') === requestedId
+          );
+          if (matched) {
+            setMode('template');
+            setSelectedTemplateId(matched.template_id);
+            setTemplateSubject(matched.subject || '');
+          } else {
+            setSelectedTemplateId('');
+            toastError(
+              'The selected email template is inactive or unavailable. Please choose another template.',
+              'Template Unavailable'
+            );
+          }
+        } else if (activeTemplates.length > 0) {
           const first = activeTemplates[0];
           setSelectedTemplateId(first.template_id);
           setTemplateSubject(first.subject || '');
@@ -123,7 +158,7 @@ export default function EmailCampaignWizard({
     } finally {
       setIsLoadingTemplates(false);
     }
-  }, []);
+  }, [preselectedTemplateId, preselectedTemplate, toastError]);
 
   // Fetch templates on mount and allow failed requests to be retried.
   useEffect(() => {

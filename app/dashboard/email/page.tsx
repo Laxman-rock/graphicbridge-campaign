@@ -1,20 +1,66 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import DashboardHeader from '@/components/layout/DashboardHeader';
 import Sidebar from '@/components/layout/Sidebar';
 import SettingsModal from '@/components/layout/SettingsModal';
 import EmailCampaignWizard from '@/components/email/EmailCampaignWizard';
 import CampaignsList from '@/components/email/CampaignsList';
 import TemplateManager from '@/components/email/TemplateManager';
+import { EmailTemplate } from '@/types/email';
 import { Send, History, FileText } from 'lucide-react';
 
 type EmailTab = 'wizard' | 'history' | 'templates';
 
 export default function EmailCampaignPage() {
   const [activeTab, setActiveTab] = useState<EmailTab>('wizard');
+  const [preselectedTemplate, setPreselectedTemplate] = useState<EmailTemplate | null>(null);
+  const [preselectedTemplateId, setPreselectedTemplateId] = useState<string | null>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const tabParam = params.get('tab') as EmailTab | null;
+    const templateIdParam = params.get('templateId');
+
+    if (templateIdParam) {
+      setPreselectedTemplateId(templateIdParam);
+      setActiveTab('wizard');
+    } else if (tabParam && (tabParam === 'wizard' || tabParam === 'history' || tabParam === 'templates')) {
+      setActiveTab(tabParam);
+    }
+  }, []);
+
+  const updateUrlParams = (tab: EmailTab, templateId?: string | null) => {
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    url.searchParams.set('tab', tab);
+    if (templateId) {
+      url.searchParams.set('templateId', templateId);
+    } else {
+      url.searchParams.delete('templateId');
+    }
+    window.history.replaceState({}, '', url.toString());
+  };
+
+  const handleUseTemplate = (template: EmailTemplate) => {
+    const stableId = String(
+      template.template_id || template._id || template.id || template.name
+    );
+    setPreselectedTemplate(template);
+    setPreselectedTemplateId(stableId);
+    setActiveTab('wizard');
+    updateUrlParams('wizard', stableId);
+  };
+
+  const handleCampaignCreated = () => {
+    setPreselectedTemplate(null);
+    setPreselectedTemplateId(null);
+    setActiveTab('history');
+    updateUrlParams('history', null);
+  };
 
   return (
     <div className="min-h-screen flex flex-col bg-[#F8FAFC]">
@@ -86,12 +132,18 @@ export default function EmailCampaignPage() {
 
         {/* Tab Content */}
         {activeTab === 'wizard' && (
-          <EmailCampaignWizard onCampaignCreated={() => setActiveTab('history')} />
+          <EmailCampaignWizard
+            preselectedTemplate={preselectedTemplate}
+            preselectedTemplateId={preselectedTemplateId}
+            onCampaignCreated={handleCampaignCreated}
+          />
         )}
 
         {activeTab === 'history' && <CampaignsList />}
 
-        {activeTab === 'templates' && <TemplateManager />}
+        {activeTab === 'templates' && (
+          <TemplateManager onUseTemplate={handleUseTemplate} />
+        )}
       </div>
 
       <SettingsModal
