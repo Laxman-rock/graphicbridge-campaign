@@ -21,7 +21,10 @@ export type WhatsAppRecipientStatus =
   | 'accepted'
   | 'failed'
   | 'processing'
-  | 'sent';
+  | 'sent'
+  | 'delivered'
+  | 'read'
+  | 'seen';
 
 export interface WhatsAppRecipientObject {
   whatsapp_number?: string;
@@ -165,6 +168,9 @@ export interface WhatsAppCampaignRecipientRecord {
   variables?: Record<string, string>;
   status: WhatsAppRecipientStatus;
   sent_at?: string | null;
+  delivered_at?: string | null;
+  read_at?: string | null;
+  seen_at?: string | null;
   message_id?: string | null;
   error_message?: string | null;
   diagnostic_reason?: string | null;
@@ -182,6 +188,9 @@ export interface WhatsAppCampaignSummary {
   message_type?: WhatsAppMessageType;
   total_recipients: number;
   sent_count: number;
+  delivered_count?: number;
+  read_count?: number;
+  seen_count?: number;
   failed_count: number;
   status: WhatsAppCampaignStatus;
   created_at?: string;

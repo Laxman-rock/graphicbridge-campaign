@@ -16,6 +16,8 @@ import {
   Trash2,
   AlertCircle,
   Info,
+  Send,
+  CheckCheck,
 } from 'lucide-react';
 import {
   WhatsAppCampaignSummary,
@@ -115,6 +117,9 @@ export default function WhatsAppCampaignsList() {
   // Detail Modal State
   const [selectedCampaignId, setSelectedCampaignId] = useState<string | number | null>(null);
   const [campaignDetail, setCampaignDetail] = useState<WhatsAppCampaignDetail | null>(null);
+  const [recipientStatusFilter, setRecipientStatusFilter] = useState<
+    'all' | 'sent' | 'delivered' | 'seen' | 'failed'
+  >('all');
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
 
@@ -222,7 +227,10 @@ export default function WhatsAppCampaignsList() {
     isSilent = false
   ) => {
     setSelectedCampaignId(id);
-    if (!isSilent) setIsLoadingDetail(true);
+    if (!isSilent) {
+      setIsLoadingDetail(true);
+      setRecipientStatusFilter('all');
+    }
     try {
       const res = await getWhatsAppCampaign(id, fallbackId);
       if (res.success && res.data) {
@@ -234,19 +242,21 @@ export default function WhatsAppCampaignsList() {
         let resolvedSent = detail.sent_count;
 
         if (recs.length > 0) {
-          const sentRecs = recs.filter(
-            (r) => r.status === 'accepted' || (r.status as string) === 'sent'
+          const isSentStatus = (s: string) =>
+            s === 'accepted' || s === 'sent' || s === 'delivered' || s === 'read' || s === 'seen';
+          const sentRecs = recs.filter((r) =>
+            isSentStatus(String(r.status || '').toLowerCase())
           ).length;
-          const failedRecs = recs.filter((r) => r.status === 'failed').length;
-          const allSent = recs.every(
-            (r) => r.status === 'accepted' || (r.status as string) === 'sent'
+          const failedRecs = recs.filter(
+            (r) => String(r.status || '').toLowerCase() === 'failed'
+          ).length;
+          const allSent = recs.every((r) =>
+            isSentStatus(String(r.status || '').toLowerCase())
           );
-          const noPending = !recs.some(
-            (r) =>
-              r.status === 'queued' ||
-              r.status === 'sending' ||
-              (r.status as string) === 'processing'
-          );
+          const noPending = !recs.some((r) => {
+            const st = String(r.status || '').toLowerCase();
+            return st === 'queued' || st === 'sending' || st === 'processing';
+          });
 
           if (allSent || (sentRecs > 0 && noPending)) {
             resolvedStatus =
@@ -464,12 +474,27 @@ export default function WhatsAppCampaignsList() {
   const getRecipientStatusBadge = (status: WhatsAppRecipientStatus | string) => {
     const s = (status || '').toLowerCase();
     switch (s) {
+      case 'read':
+      case 'seen':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+            <CheckCheck className="w-3 h-3 text-indigo-600" />
+            Seen
+          </span>
+        );
+      case 'delivered':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-sky-50 text-sky-700 border border-sky-200">
+            <CheckCheck className="w-3 h-3 text-sky-600" />
+            Delivered
+          </span>
+        );
       case 'accepted':
       case 'sent':
         return (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
             <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-            Accepted
+            Sent
           </span>
         );
       case 'sending':
@@ -847,48 +872,229 @@ export default function WhatsAppCampaignsList() {
                   <p className="text-sm font-medium">Loading campaign details...</p>
                 </div>
               ) : campaignDetail ? (
-                <>
-                  {/* Status & Counts */}
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                    <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-100">
-                      <span className="text-slate-400 font-medium">Status:</span>
-                      <div className="mt-1">{getCampaignStatusBadge(campaignDetail.status)}</div>
-                    </div>
-                    <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-100">
-                      <span className="text-slate-400 font-medium">Total Contacts:</span>
-                      <p className="text-base font-bold text-slate-900 mt-0.5">
-                        {campaignDetail.total_recipients || 0}
-                      </p>
-                    </div>
-                    <div className="p-3.5 rounded-2xl bg-emerald-50/60 border border-emerald-100">
-                      <span className="text-emerald-700 font-medium">Accepted:</span>
-                      <p className="text-base font-bold text-emerald-700 mt-0.5">
-                        {campaignDetail.sent_count || 0}
-                      </p>
-                    </div>
-                    <div className="p-3.5 rounded-2xl bg-rose-50/60 border border-rose-100">
-                      <span className="text-rose-700 font-medium">Failed:</span>
-                      <p className="text-base font-bold text-rose-700 mt-0.5">
-                        {campaignDetail.failed_count || 0}
-                      </p>
-                    </div>
-                  </div>
+                (() => {
+                  const recs = campaignDetail.recipients || [];
+                  const total = campaignDetail.total_recipients || recs.length || 0;
+                  const isSentStatus = (s: string) =>
+                    s === 'accepted' ||
+                    s === 'sent' ||
+                    s === 'delivered' ||
+                    s === 'read' ||
+                    s === 'seen';
+                  const isDeliveredStatus = (s: string) =>
+                    s === 'delivered' || s === 'read' || s === 'seen';
+                  const isSeenStatus = (s: string) => s === 'read' || s === 'seen';
 
-                  {/* Progress & Success Bar */}
-                  {(() => {
-                    const metrics = calculateCampaignMetrics(
-                      campaignDetail.total_recipients || 0,
-                      campaignDetail.sent_count || 0,
-                      campaignDetail.failed_count || 0
-                    );
-                    const total = campaignDetail.total_recipients || 0;
-                    const sent = campaignDetail.sent_count || 0;
-                    const failed = campaignDetail.failed_count || 0;
-                    return (
+                  const sentFromRecs = recs.filter((r) =>
+                    isSentStatus(String(r.status || '').toLowerCase())
+                  ).length;
+                  const deliveredFromRecs = recs.filter(
+                    (r) =>
+                      isDeliveredStatus(String(r.status || '').toLowerCase()) ||
+                      Boolean(r.delivered_at)
+                  ).length;
+                  const seenFromRecs = recs.filter(
+                    (r) =>
+                      isSeenStatus(String(r.status || '').toLowerCase()) ||
+                      Boolean(r.read_at || r.seen_at)
+                  ).length;
+                  const failedFromRecs = recs.filter(
+                    (r) => String(r.status || '').toLowerCase() === 'failed'
+                  ).length;
+
+                  const sentCount = Math.max(campaignDetail.sent_count || 0, sentFromRecs);
+                  const deliveredCount = Math.max(
+                    campaignDetail.delivered_count || 0,
+                    deliveredFromRecs
+                  );
+                  const seenCount = Math.max(
+                    campaignDetail.read_count ?? campaignDetail.seen_count ?? 0,
+                    seenFromRecs
+                  );
+                  const failedCount = Math.max(
+                    campaignDetail.failed_count || 0,
+                    failedFromRecs
+                  );
+
+                  const pct = (val: number) =>
+                    total > 0 ? Math.min(100, Math.round((val / total) * 100)) : 0;
+
+                  const filteredRecipients = recs.filter((rec) => {
+                    if (recipientStatusFilter === 'all') return true;
+                    const st = String(rec.status || '').toLowerCase();
+                    if (recipientStatusFilter === 'sent') return isSentStatus(st);
+                    if (recipientStatusFilter === 'delivered') {
+                      return isDeliveredStatus(st) || Boolean(rec.delivered_at);
+                    }
+                    if (recipientStatusFilter === 'seen') {
+                      return isSeenStatus(st) || Boolean(rec.read_at || rec.seen_at);
+                    }
+                    if (recipientStatusFilter === 'failed') return st === 'failed';
+                    return true;
+                  });
+
+                  const metrics = calculateCampaignMetrics(total, sentCount, failedCount);
+
+                  return (
+                    <>
+                      {/* Campaign Summary Header */}
+                      <div className="grid grid-cols-2 gap-3 text-xs">
+                        <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-100">
+                          <span className="text-slate-400 font-medium">Status:</span>
+                          <div className="mt-1">{getCampaignStatusBadge(campaignDetail.status)}</div>
+                        </div>
+                        <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-100">
+                          <span className="text-slate-400 font-medium">Total Contacts:</span>
+                          <p className="text-base font-bold text-slate-900 mt-0.5">
+                            {total.toLocaleString()}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Delivery Insights Wave Overview */}
+                      {(() => {
+                        const wavePoints = [
+                          {
+                            label: 'Sent',
+                            count: sentCount,
+                            percent: pct(sentCount),
+                            x: 110,
+                            color: '#10b981',
+                            textColor: 'text-emerald-600',
+                            icon: <Send className="w-3.5 h-3.5 text-emerald-600" />,
+                          },
+                          {
+                            label: 'Delivered',
+                            count: deliveredCount,
+                            percent: pct(deliveredCount),
+                            x: 310,
+                            color: '#059669',
+                            textColor: 'text-emerald-700',
+                            icon: <CheckCheck className="w-3.5 h-3.5 text-emerald-600" />,
+                          },
+                          {
+                            label: 'Seen',
+                            count: seenCount,
+                            percent: pct(seenCount),
+                            x: 510,
+                            color: '#0284c7',
+                            textColor: 'text-sky-700',
+                            icon: <CheckCheck className="w-3.5 h-3.5 text-sky-600" />,
+                          },
+                          {
+                            label: 'Failed',
+                            count: failedCount,
+                            percent: pct(failedCount),
+                            x: 710,
+                            color: '#e11d48',
+                            textColor: 'text-rose-600',
+                            icon: <AlertCircle className="w-3.5 h-3.5 text-rose-600" />,
+                          },
+                        ].map((pt) => ({
+                          ...pt,
+                          y: 132 - (pt.percent / 100) * 102,
+                        }));
+
+                        let linePath = `M ${wavePoints[0].x} ${wavePoints[0].y}`;
+                        for (let i = 0; i < wavePoints.length - 1; i++) {
+                          const p0 = wavePoints[i];
+                          const p1 = wavePoints[i + 1];
+                          const cx = (p0.x + p1.x) / 2;
+                          linePath += ` C ${cx} ${p0.y}, ${cx} ${p1.y}, ${p1.x} ${p1.y}`;
+                        }
+                        const areaPath = `${linePath} L ${wavePoints[wavePoints.length - 1].x} 145 L ${wavePoints[0].x} 145 Z`;
+
+                        return (
+                          <div className="p-4 sm:p-5 rounded-2xl border border-slate-200/80 bg-white space-y-4">
+                            <div className="flex flex-wrap items-start justify-between gap-2">
+                              <div>
+                                <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+                                  DELIVERY INSIGHTS ({total.toLocaleString()} RECIPIENTS)
+                                </h4>
+                                <p className="text-[11px] text-slate-400 mt-0.5">
+                                  Sent, Delivered, Seen &amp; Failed wave overview
+                                </p>
+                              </div>
+                              <span className="inline-flex items-center px-3 py-1 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                Dispatch: {metrics.progress}%
+                              </span>
+                            </div>
+
+                            <div className="p-4 sm:p-5 rounded-2xl bg-slate-50/50 border border-slate-100 space-y-3">
+                              <div className="w-full overflow-hidden">
+                                <svg
+                                  viewBox="0 0 820 155"
+                                  className="w-full h-32 sm:h-36 overflow-visible"
+                                  aria-label="Delivery insights wave chart"
+                                >
+                                  <defs>
+                                    <linearGradient id="waWaveStroke" x1="0%" y1="0%" x2="100%" y2="0%">
+                                      <stop offset="0%" stopColor="#10b981" />
+                                      <stop offset="35%" stopColor="#059669" />
+                                      <stop offset="68%" stopColor="#0284c7" />
+                                      <stop offset="100%" stopColor="#e11d48" />
+                                    </linearGradient>
+                                    <linearGradient id="waWaveFill" x1="0%" y1="0%" x2="0%" y2="100%">
+                                      <stop offset="0%" stopColor="#10b981" stopOpacity="0.22" />
+                                      <stop offset="75%" stopColor="#0ea5e9" stopOpacity="0.06" />
+                                      <stop offset="100%" stopColor="#ffffff" stopOpacity="0" />
+                                    </linearGradient>
+                                  </defs>
+
+                                  {/* Area under curve */}
+                                  <path d={areaPath} fill="url(#waWaveFill)" />
+
+                                  {/* Smooth wave curve */}
+                                  <path
+                                    d={linePath}
+                                    fill="none"
+                                    stroke="url(#waWaveStroke)"
+                                    strokeWidth="3"
+                                    strokeLinecap="round"
+                                  />
+
+                                  {/* Hollow data point markers */}
+                                  {wavePoints.map((pt) => (
+                                    <circle
+                                      key={pt.label}
+                                      cx={pt.x}
+                                      cy={pt.y}
+                                      r="6"
+                                      fill="#ffffff"
+                                      stroke={pt.color}
+                                      strokeWidth="3"
+                                    />
+                                  ))}
+                                </svg>
+                              </div>
+
+                              {/* 4-column metric labels */}
+                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center pt-1">
+                                {wavePoints.map((pt) => (
+                                  <div key={pt.label} className="space-y-0.5">
+                                    <p className={`text-sm font-extrabold ${pt.textColor}`}>
+                                      {pt.count.toLocaleString()}
+                                    </p>
+                                    <div className="flex items-center justify-center gap-1 text-xs font-semibold text-slate-700">
+                                      {pt.icon}
+                                      <span>{pt.label}</span>
+                                    </div>
+                                    <p className="text-[11px] text-slate-400 font-medium">
+                                      {pt.percent}%
+                                    </p>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                      {/* Progress & Success Bar */}
                       <div className="p-3.5 rounded-2xl bg-slate-50/80 border border-slate-200/80 space-y-2">
                         <div className="flex items-center justify-between text-xs">
                           <span className="font-semibold text-slate-700">
-                            Dispatch Progress: <strong className="text-slate-900">{metrics.progress}%</strong> ({sent + failed}/{total})
+                            Dispatch Progress: <strong className="text-slate-900">{metrics.progress}%</strong> ({sentCount + failedCount}/{total})
                           </span>
                           <span className="font-semibold text-emerald-700">
                             Success Rate: {metrics.successRate}%
@@ -896,25 +1102,19 @@ export default function WhatsAppCampaignsList() {
                         </div>
                         <div className="w-full bg-slate-200/80 h-2 rounded-full overflow-hidden flex">
                           <div
-                            style={{
-                              width: `${total > 0 ? Math.min(100, Math.round((sent / total) * 100)) : 0}%`,
-                            }}
+                            style={{ width: `${pct(sentCount)}%` }}
                             className="bg-emerald-500 h-full transition-all"
-                            title={`${sent} accepted (${metrics.successRate}%)`}
+                            title={`${sentCount} sent (${metrics.successRate}%)`}
                           />
-                          {failed > 0 && (
+                          {failedCount > 0 && (
                             <div
-                              style={{
-                                width: `${total > 0 ? Math.min(100, Math.round((failed / total) * 100)) : 0}%`,
-                              }}
+                              style={{ width: `${pct(failedCount)}%` }}
                               className="bg-rose-500 h-full transition-all"
-                              title={`${failed} failed`}
+                              title={`${failedCount} failed`}
                             />
                           )}
                         </div>
                       </div>
-                    );
-                  })()}
 
                   {/* Campaign Details Informational Notice */}
                   <div className="p-3.5 rounded-2xl bg-blue-50/60 border border-blue-200/70 flex items-start gap-2.5 text-xs text-blue-900">
@@ -1018,9 +1218,37 @@ export default function WhatsAppCampaignsList() {
 
                   {/* Recipients List */}
                   <div className="space-y-3">
-                    <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
-                      Recipient Delivery Details ({campaignDetail.recipients?.length || 0})
-                    </h4>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+                        Recipient Delivery Details ({filteredRecipients.length} of {recs.length})
+                      </h4>
+
+                      {/* Filter Pills */}
+                      <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                        {(
+                          [
+                            { key: 'all', label: `All (${recs.length})` },
+                            { key: 'sent', label: `Sent (${sentFromRecs})` },
+                            { key: 'delivered', label: `Delivered (${deliveredFromRecs})` },
+                            { key: 'seen', label: `Seen (${seenFromRecs})` },
+                            { key: 'failed', label: `Failed (${failedFromRecs})` },
+                          ] as const
+                        ).map((pill) => (
+                          <button
+                            key={pill.key}
+                            type="button"
+                            onClick={() => setRecipientStatusFilter(pill.key)}
+                            className={`px-2.5 py-1 rounded-lg font-semibold transition-colors ${
+                              recipientStatusFilter === pill.key
+                                ? 'bg-emerald-600 text-white shadow-2xs'
+                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                            }`}
+                          >
+                            {pill.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                     <div className="border border-slate-200 rounded-2xl overflow-hidden max-h-72 overflow-y-auto">
                       <table className="w-full text-left border-collapse text-xs">
                         <thead className="bg-slate-50 sticky top-0 border-b border-slate-200 text-[10px] font-semibold text-slate-500 uppercase">
@@ -1032,7 +1260,14 @@ export default function WhatsAppCampaignsList() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
-                          {campaignDetail.recipients?.map((rec, idx) => (
+                          {filteredRecipients.length === 0 ? (
+                            <tr>
+                              <td colSpan={4} className="py-8 text-center text-slate-400 text-xs">
+                                No recipients match this status filter.
+                              </td>
+                            </tr>
+                          ) : (
+                            filteredRecipients.map((rec, idx) => (
                             <tr key={idx} className="hover:bg-slate-50/50">
                               <td className="py-2.5 px-4 font-mono font-medium text-slate-800">
                                 {rec.whatsapp_number || rec.phone}
@@ -1077,12 +1312,15 @@ export default function WhatsAppCampaignsList() {
                                 )}
                               </td>
                             </tr>
-                          ))}
+                          ))
+                          )}
                         </tbody>
                       </table>
                     </div>
                   </div>
                 </>
+                  );
+                })()
               ) : null}
             </div>
 
